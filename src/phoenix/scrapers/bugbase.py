@@ -1,10 +1,14 @@
-"""BugBase scraper — Tier 3 (Playwright, React SPA).
+"""BugBase scraper — Tier 3 (Playwright, Next.js SPA).
 
-Leaderboard: https://bugbase.in/dashboard/leaderboard
+Leaderboard: https://bugbase.in/leaderboard
 Profile: https://bugbase.in/dashboard/profile/{username}
 
-The leaderboard URL returns a 404 page ("Oops! You ran into an accidental bug.
-Looks like this page does not exist."). The endpoint is currently unavailable.
+Body text format:
+- Top 3: expanded cards with label/value pairs on separate lines
+  username, "Global Rank", rank, "Country", CC, "Success rate", N%, "Reputation", score
+- 4+: compact table rows
+  "Global Rank\tUsername\tRepuation\tSuccess Rate\tCountry" header, then
+  rank, username, "score\trate%\tCC" per entry
 """
 
 import re
@@ -17,7 +21,7 @@ from phoenix.scrapers.utils.normalizer import extract_social_links
 
 log = get_logger(__name__)
 
-LEADERBOARD_URL = "https://bugbase.in/dashboard/leaderboard"
+LEADERBOARD_URL = "https://bugbase.in/leaderboard"
 PROFILE_BASE = "https://bugbase.in/dashboard/profile"
 
 
@@ -26,12 +30,127 @@ class BugbaseScraper(PlaywrightScraper):
     platform_name = "bugbase"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        log.warning(
-            "bugbase_endpoint_unavailable",
-            msg="BugBase leaderboard endpoint returns 404. "
-                "The page no longer exists at the known URL.",
-        )
-        return []
+        page = await self._new_page()
+        entries: list[LeaderboardEntry] = []
+
+        try:
+            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
+            await self._dismiss_cookies(page)
+            body = await self._get_body_text(page, wait_ms=8000)
+
+            lines = [l.strip() for l in body.split("\n") if l.strip()]
+            i = 0
+
+            # Skip header lines until we hit the first username
+            while i < len(lines):
+                if lines[i] == "Global Leaderboard" or lines[i].startswith("Check out"):
+                    i += 1
+                    continue
+                if lines[i] == "Global":
+                    i += 1
+                    continue
+                break
+
+            # Parse top-3 expanded cards: username, "Global Rank", N, "Country", CC, "Success rate", N%, "Reputation", score
+            while i < len(lines) and len(entries) < min(3, max_entries):
+                username = lines[i]
+                # Verify next line is "Global Rank"
+                if i + 4 < len(lines) and lines[i + 1] == "Global Rank":
+                    rank = int(lines[i + 2])
+                    # Find Reputation value
+                    score = None
+                    success_rate = None
+                    country = None
+                    j = i + 3
+                    while j < len(lines) and j < i + 10:
+                        if lines[j] == "Country" and j + 1 < len(lines):
+                            country = lines[j + 1]
+                        if lines[j] == "Success rate" and j + 1 < len(lines):
+                            rate_match = re.match(r"(\d+)%", lines[j + 1])
+                            if rate_match:
+                                success_rate = float(rate_match.group(1))
+                        if lines[j] == "Reputation" and j + 1 < len(lines):
+                            try:
+                                score = float(lines[j + 1])
+                            except ValueError:
+                                pass
+                            i = j + 2
+                            break
+                        j += 1
+                    else:
+                        i = j
+
+                    entries.append(
+                        LeaderboardEntry(
+                            username=username,
+                            rank=rank,
+                            score=score,
+                            profile_url=f"{PROFILE_BASE}/{username}",
+                            extra={
+                                k: v for k, v in {
+                                    "country": country,
+                                    "success_rate": success_rate,
+                                }.items() if v is not None
+                            },
+                        )
+                    )
+                else:
+                    break
+
+            # Skip table header line
+            while i < len(lines):
+                if "Global Rank" in lines[i] and "Username" in lines[i]:
+                    i += 1
+                    break
+                i += 1
+
+            # Parse compact rows: rank line, username line, "score\trate%\tCC" line
+            while i + 2 < len(lines) and len(entries) < max_entries:
+                rank_line = lines[i]
+                if not rank_line.isdigit():
+                    break
+                rank = int(rank_line)
+                username = lines[i + 1]
+                stats_line = lines[i + 2]
+                parts = stats_line.split("\t")
+
+                score = None
+                success_rate = None
+                country = None
+                if parts:
+                    try:
+                        score = float(parts[0].replace(",", ""))
+                    except ValueError:
+                        pass
+                if len(parts) >= 2:
+                    rate_match = re.match(r"(\d+)%", parts[1])
+                    if rate_match:
+                        success_rate = float(rate_match.group(1))
+                if len(parts) >= 3:
+                    country = parts[2].strip()
+
+                entries.append(
+                    LeaderboardEntry(
+                        username=username,
+                        rank=rank,
+                        score=score,
+                        profile_url=f"{PROFILE_BASE}/{username}",
+                        extra={
+                            k: v for k, v in {
+                                "country": country,
+                                "success_rate": success_rate,
+                            }.items() if v is not None
+                        },
+                    )
+                )
+                i += 3
+
+            log.info("bugbase_leaderboard_scraped", entries=len(entries))
+
+        finally:
+            await page.context.close()
+
+        return entries
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         page = await self._new_page()

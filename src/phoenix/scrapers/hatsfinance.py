@@ -24,51 +24,12 @@ class HatsFinanceScraper(PlaywrightScraper):
     platform_name = "hatsfinance"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        page = await self._new_page()
-        entries: list[LeaderboardEntry] = []
-
-        try:
-            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
-            await self._dismiss_cookies(page)
-            body = await self._get_body_text(page)
-
-            # Parse leaderboard rows from rendered body text
-            lines = body.split("\n")
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-
-                # Try rank + username/address + payout pattern
-                # Hats may show Ethereum addresses or handles
-                match = re.match(r"^(\d+)\s+(0x[\da-fA-F]+|\S+)\s+\$?([\d,]+(?:\.\d+)?)", line)
-                if match:
-                    rank = int(match.group(1))
-                    username = match.group(2)
-                    score_str = match.group(3).replace(",", "")
-                    try:
-                        score = float(score_str)
-                    except ValueError:
-                        score = None
-
-                    entries.append(
-                        LeaderboardEntry(
-                            username=username,
-                            rank=rank,
-                            score=score,
-                            profile_url=f"{APP_URL}/profile/{username}",
-                        )
-                    )
-
-                    if len(entries) >= max_entries:
-                        break
-
-            log.info("hatsfinance_leaderboard_parsed", count=len(entries))
-
-        finally:
-            await page.context.close()
-
-        return entries
+        log.warning(
+            "hatsfinance_dns_dead",
+            msg="Hats Finance app.hats.finance domain no longer resolves (DNS failure). "
+                "The Graph subgraph has also been removed.",
+        )
+        return []
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         """Scrape profile page if available, otherwise return minimal data."""

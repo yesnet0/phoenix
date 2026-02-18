@@ -20,7 +20,11 @@ class TopcoderScraper(ApiScraper):
     platform_name = "topcoder"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        raise ConnectionError("Topcoder API is currently unavailable (503)")
+        log.warning(
+            "topcoder_api_unavailable",
+            msg="Topcoder API is currently unavailable (503 on all endpoints).",
+        )
+        return []
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         raise ConnectionError("Topcoder API is currently unavailable (503)")

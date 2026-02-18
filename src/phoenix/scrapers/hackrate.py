@@ -26,10 +26,12 @@ class HackrateScraper(PlaywrightScraper):
     platform_name = "hackrate"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        raise ConnectionError(
-            "Hackrate leaderboard requires authentication. "
-            "Cannot scrape without logged-in session credentials."
+        log.warning(
+            "hackrate_auth_required",
+            msg="Hackrate leaderboard requires authentication. "
+                "Cannot scrape without logged-in session credentials.",
         )
+        return []
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         page = await self._new_page()
