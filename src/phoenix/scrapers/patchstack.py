@@ -51,12 +51,9 @@ class PatchstackScraper(ApiScraper):
                 if not uuid:
                     continue
 
-                # Use name as username if available, fall back to UUID
-                display = name if name else uuid
-
                 entries.append(
                     LeaderboardEntry(
-                        username=display,
+                        username=uuid,
                         rank=((page - 1) * per_page) + i + 1,
                         score=item.get("xp"),
                         profile_url=f"{SITE_URL}/database/researcher/{uuid}",
@@ -108,7 +105,7 @@ class PatchstackScraper(ApiScraper):
         if not user:
             raise ValueError(f"Patchstack profile not found: {username}")
 
-        name = user.get("name", "")
+        name = user.get("name", "").strip().lstrip("\ufeff")
         twitter_url = user.get("twitter", "") or ""
         github_url = user.get("github", "") or ""
         website_url = user.get("website", "") or ""
