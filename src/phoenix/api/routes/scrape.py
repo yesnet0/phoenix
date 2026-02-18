@@ -69,6 +69,10 @@ def run_scrape(self, platform_name: str, max_profiles: int = 50) -> dict:
 
 
 async def _run_scrape_async(job_id: str, platform_name: str, max_profiles: int) -> dict:
+    # Reset Neo4j driver to bind to current event loop (Celery creates fresh loops per asyncio.run)
+    from phoenix.core.database import reset_driver
+    await reset_driver()
+
     start = time.time()
     scraper = get_scraper(platform_name)
     errors: list[str] = []

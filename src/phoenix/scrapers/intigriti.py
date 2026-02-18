@@ -1,4 +1,12 @@
-"""Intigriti scraper — Tier 3 (Playwright, JS-rendered SPA)."""
+"""Intigriti scraper — Tier 3 (Playwright, JS-rendered SPA).
+
+Leaderboard: app.intigriti.com/leaderboard — server-rendered table with rank, researcher, reputation, streak.
+Profile: app.intigriti.com/profile/{username} — stats, skills, achievements, external accounts.
+External accounts section provides cross-platform links (HackerOne, Bugcrowd, Twitter, etc.)
+which are critical for identity resolution.
+"""
+
+import re
 
 from playwright.async_api import async_playwright, Browser, Page
 
@@ -12,8 +20,8 @@ from phoenix.scrapers.utils.timing import jittered_delay
 
 log = get_logger(__name__)
 
-LEADERBOARD_URL = "https://app.intigriti.com/researcher/leaderboard"
-PROFILE_BASE = "https://app.intigriti.com/researcher/profile"
+LEADERBOARD_URL = "https://app.intigriti.com/leaderboard"
+PROFILE_BASE = "https://app.intigriti.com/profile"
 
 
 @register_scraper("intigriti")
@@ -23,7 +31,6 @@ class IntigritiScraper(PlatformScraper):
     def __init__(self) -> None:
         self._pw = None
         self._browser: Browser | None = None
-        self._intercepted_api: list[dict] = []
 
     async def _get_browser(self) -> Browser:
         if self._browser is None:
@@ -44,73 +51,74 @@ class IntigritiScraper(PlatformScraper):
         )
         page = await context.new_page()
         await apply_stealth(page)
-
-        # Intercept API responses to capture underlying data
-        async def handle_response(response):
-            if "/api/" in response.url and response.status == 200:
-                try:
-                    body = await response.json()
-                    self._intercepted_api.append({"url": response.url, "data": body})
-                except Exception:
-                    pass
-
-        page.on("response", handle_response)
         return page
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
         page = await self._new_page()
         entries: list[LeaderboardEntry] = []
-        self._intercepted_api.clear()
 
         try:
-            await page.goto(LEADERBOARD_URL, wait_until="networkidle", timeout=30000)
-            await jittered_delay(2.0, 4.0)
+            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(5000)
 
-            # First check intercepted API responses for structured data
-            for intercepted in self._intercepted_api:
-                if "leaderboard" in intercepted["url"].lower():
-                    data = intercepted["data"]
-                    items = data if isinstance(data, list) else data.get("records", data.get("items", data.get("data", [])))
-                    if isinstance(items, list):
-                        for i, item in enumerate(items[:max_entries]):
-                            username = item.get("userName") or item.get("username") or item.get("name", "")
-                            if username:
-                                entries.append(
-                                    LeaderboardEntry(
-                                        username=username,
-                                        rank=item.get("rank", i + 1),
-                                        score=item.get("reputation") or item.get("points"),
-                                        profile_url=f"{PROFILE_BASE}/{username}",
-                                    )
-                                )
-                    if entries:
-                        return entries
+            # Click "Accept All" cookies if present
+            try:
+                accept = await page.query_selector("button:has-text('Accept All')")
+                if accept:
+                    await accept.click()
+                    await page.wait_for_timeout(1000)
+            except Exception:
+                pass
 
-            # Fallback: DOM scraping
-            rows = await page.query_selector_all(
-                "table tbody tr, [class*='leaderboard'] [class*='row'], [class*='researcher']"
-            )
-
-            for i, row in enumerate(rows[:max_entries]):
+            # Click "Show more" to load all entries
+            for _ in range(10):
                 try:
-                    link = await row.query_selector("a[href*='profile']")
-                    if link:
-                        href = await link.get_attribute("href") or ""
-                        username = href.rstrip("/").split("/")[-1]
+                    show_more = await page.query_selector("button:has-text('Show more')")
+                    if show_more and await show_more.is_visible():
+                        await show_more.click()
+                        await page.wait_for_timeout(2000)
                     else:
-                        text = (await row.inner_text()).strip()
-                        username = text.split()[0] if text else ""
+                        break
+                except Exception:
+                    break
 
-                    if username:
-                        entries.append(
-                            LeaderboardEntry(
-                                username=username,
-                                rank=i + 1,
-                                profile_url=f"{PROFILE_BASE}/{username}",
+            body = await page.inner_text("body")
+
+            # Parse leaderboard from text — format: "RANK\nRESEARCHER\nREPUTATION\nSTREAK\n1\nusername\n123pts\nLevel\n..."
+            # Find the table data section after the header
+            lines = body.split("\n")
+            lines = [l.strip() for l in lines if l.strip()]
+
+            # Find where the rank data starts (after "STREAK" header)
+            start_idx = None
+            for i, line in enumerate(lines):
+                if line == "STREAK":
+                    start_idx = i + 1
+                    break
+
+            if start_idx:
+                i = start_idx
+                while i < len(lines) and len(entries) < max_entries:
+                    # Pattern: rank_number, username, points, level
+                    if lines[i].isdigit():
+                        rank = int(lines[i])
+                        if i + 2 < len(lines):
+                            username = lines[i + 1]
+                            pts_match = re.match(r"(\d+)pts", lines[i + 2])
+                            score = float(pts_match.group(1)) if pts_match else None
+                            entries.append(
+                                LeaderboardEntry(
+                                    username=username,
+                                    rank=rank,
+                                    score=score,
+                                    profile_url=f"{PROFILE_BASE}/{username}",
+                                )
                             )
-                        )
-                except Exception as e:
-                    log.warning("leaderboard_row_failed", index=i, error=str(e))
+                            i += 4  # skip rank, username, pts, level
+                            continue
+                    i += 1
+
+            log.info("intigriti_leaderboard_scraped", entries=len(entries))
 
         finally:
             await page.context.close()
@@ -119,67 +127,108 @@ class IntigritiScraper(PlatformScraper):
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         page = await self._new_page()
-        self._intercepted_api.clear()
 
         try:
             profile_url = f"{PROFILE_BASE}/{username}"
-            await page.goto(profile_url, wait_until="networkidle", timeout=30000)
-            await jittered_delay(2.0, 4.0)
+            await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(5000)
 
-            display_name = ""
-            bio = ""
-            location = ""
+            # Dismiss cookies
+            try:
+                accept = await page.query_selector("button:has-text('Accept All')")
+                if accept:
+                    await accept.click()
+                    await page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            body = await page.inner_text("body")
             raw_data: dict = {}
+
+            # Location — appears right after username
+            location = ""
+            lines = body.split("\n")
+            lines = [l.strip() for l in lines if l.strip()]
+            for i, line in enumerate(lines):
+                if line == username and i + 1 < len(lines):
+                    next_line = lines[i + 1]
+                    # Location is a country/city, not a stat label
+                    if next_line not in ("REP. 90 DAYS", "REP. ALL TIME") and "pts" not in next_line:
+                        location = next_line
+                    break
+
+            # Extract stats
+            rep_90 = None
+            rep_all = None
             rank = None
-            score = None
+            accepted = None
+            valid_pct = None
+            total = None
 
-            # Check intercepted API for profile data
-            for intercepted in self._intercepted_api:
-                if "profile" in intercepted["url"].lower() or username.lower() in intercepted["url"].lower():
-                    data = intercepted["data"]
-                    if isinstance(data, dict):
-                        display_name = data.get("name") or data.get("displayName", "")
-                        bio = data.get("bio", "")
-                        location = data.get("location", "")
-                        rank = data.get("rank")
-                        score = data.get("reputation") or data.get("points")
-                        raw_data = data
-                        break
+            for stat_name, stat_key in [
+                ("REP. 90 DAYS", "rep_90_days"),
+                ("REP. ALL TIME", "rep_all_time"),
+                ("RANK", "rank"),
+                ("ACCEPTED", "accepted"),
+                ("VALID", "valid"),
+                ("TOTAL", "total"),
+            ]:
+                match = re.search(rf"{re.escape(stat_name)}\s*\n\s*([\d,.]+)(?:pts|%)?", body)
+                if match:
+                    val = match.group(1).replace(",", "")
+                    raw_data[stat_key] = val
 
-            # Supplement with DOM scraping if API didn't provide enough
-            if not display_name:
-                for selector in ["h1", "[class*='name']", "[class*='username']"]:
-                    el = await page.query_selector(selector)
-                    if el:
-                        display_name = (await el.inner_text()).strip()
-                        break
+            if raw_data.get("rep_90_days"):
+                rep_90 = float(raw_data["rep_90_days"])
+            if raw_data.get("rep_all_time"):
+                rep_all = float(raw_data["rep_all_time"])
+            if raw_data.get("rank"):
+                rank = int(raw_data["rank"])
+            if raw_data.get("accepted"):
+                accepted = int(raw_data["accepted"])
+            if raw_data.get("valid"):
+                valid_pct = float(raw_data["valid"])
+            if raw_data.get("total"):
+                total = int(raw_data["total"])
 
-            if not bio:
-                for selector in ["[class*='bio']", "[class*='about']"]:
-                    el = await page.query_selector(selector)
-                    if el:
-                        bio = (await el.inner_text()).strip()
-                        break
+            # Extract skills
+            skills: list[str] = []
+            skill_section = re.search(r"Skills\n(.*?)(?:Industries|Achievements|Activity|$)", body, re.DOTALL)
+            if skill_section:
+                for line in skill_section.group(1).split("\n"):
+                    line = line.strip()
+                    if line and line not in ("Show all", "Show all "):
+                        skills.append(line)
 
-            # Extract social links
+            # Extract external account links — critical for identity resolution
             all_links = await page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            social_links = extract_social_links(bio, all_links)
+            external_links = [
+                l for l in all_links
+                if not "intigriti" in l and l.startswith("http") and "cookieyes" not in l and "google" not in l
+            ]
+            social_links = extract_social_links(body, external_links)
 
             profile = PlatformProfile(
                 platform_name=self.platform_name,
                 username=username,
-                display_name=display_name,
-                bio=bio,
+                display_name=username,
                 location=location,
                 profile_url=profile_url,
                 social_links=social_links,
+                skill_tags=skills,
             )
 
             snapshot = ProfileSnapshot(
                 profile_id=profile.id,
-                overall_score=score,
+                overall_score=rep_all,
                 global_rank=rank,
-                raw_data=raw_data,
+                finding_count=accepted,
+                acceptance_rate=valid_pct,
+                raw_data={
+                    **raw_data,
+                    "rep_90_days_score": rep_90,
+                    "total_submissions": total,
+                },
             )
 
             return profile, snapshot

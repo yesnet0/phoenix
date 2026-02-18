@@ -10,13 +10,17 @@ from phoenix.config import settings
 _driver: AsyncDriver | None = None
 
 
+def _create_driver() -> AsyncDriver:
+    return AsyncGraphDatabase.driver(
+        settings.neo4j_uri,
+        auth=(settings.neo4j_user, settings.neo4j_password),
+    )
+
+
 async def get_driver() -> AsyncDriver:
     global _driver
     if _driver is None:
-        _driver = AsyncGraphDatabase.driver(
-            settings.neo4j_uri,
-            auth=(settings.neo4j_user, settings.neo4j_password),
-        )
+        _driver = _create_driver()
     return _driver
 
 
@@ -25,6 +29,13 @@ async def close_driver() -> None:
     if _driver is not None:
         await _driver.close()
         _driver = None
+
+
+async def reset_driver() -> AsyncDriver:
+    """Force-create a fresh driver (e.g. after event loop change in Celery)."""
+    global _driver
+    _driver = _create_driver()
+    return _driver
 
 
 @asynccontextmanager

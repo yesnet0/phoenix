@@ -54,7 +54,12 @@ def extract_social_links(text: str, urls: list[str] | None = None) -> list[Socia
         parsed = urlparse(url if url.startswith("http") else f"https://{url}")
         if parsed.hostname and not any(
             d in (parsed.hostname or "")
-            for d in ("twitter.com", "x.com", "github.com", "linkedin.com", "hackerone.com", "bugcrowd.com")
+            for d in (
+                "twitter.com", "x.com", "github.com", "linkedin.com",
+                "hackerone.com", "bugcrowd.com", "intigriti.com",
+                "freshdesk.com", "google.com", "cookieyes.com",
+                "mozilla.org", "w3.org",
+            )
         ):
             links.append(SocialLink(platform=SocialPlatform.WEBSITE, handle=parsed.hostname, raw_value=url))
 
