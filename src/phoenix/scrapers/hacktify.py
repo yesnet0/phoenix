@@ -31,23 +31,25 @@ class HacktifyScraper(PlaywrightScraper):
             await self._dismiss_cookies(page)
             body = await self._get_body_text(page)
 
+            # Format: "POSITION\tNAME\tPOINTS\tRANK" header then
+            # "1\tLabda\t191\tExecutor" per line (tab-separated)
             lines = [l.strip() for l in body.split("\n") if l.strip()]
 
-            for i, line in enumerate(lines):
-                rank_match = re.match(r"^#?(\d+)$", line)
-                if rank_match and i + 1 < len(lines):
-                    rank = int(rank_match.group(1))
-                    username = lines[i + 1].strip()
-                    if not username or re.match(r"^[\d#]", username):
+            for line in lines:
+                parts = line.split("\t")
+                if len(parts) >= 3 and parts[0].isdigit():
+                    rank = int(parts[0])
+                    username = parts[1].strip()
+                    if not username:
                         continue
+                    try:
+                        score = float(parts[2].replace(",", ""))
+                    except ValueError:
+                        score = None
 
-                    score = None
-                    for offset in range(2, 5):
-                        if i + offset < len(lines):
-                            score_match = re.match(r"^([\d,]+)\s*(?:pts|points|rep)?$", lines[i + offset], re.I)
-                            if score_match:
-                                score = float(score_match.group(1).replace(",", ""))
-                                break
+                    extra = {}
+                    if len(parts) >= 4:
+                        extra["rank_title"] = parts[3].strip()
 
                     entries.append(
                         LeaderboardEntry(
@@ -55,6 +57,7 @@ class HacktifyScraper(PlaywrightScraper):
                             rank=rank,
                             score=score,
                             profile_url=f"{PROFILE_BASE}/{username}",
+                            extra=extra,
                         )
                     )
 

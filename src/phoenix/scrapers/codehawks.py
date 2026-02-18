@@ -1,132 +1,152 @@
-"""CodeHawks scraper — Tier 1 (REST API).
+"""CodeHawks scraper — Tier 3 (Playwright, SvelteKit SPA).
 
 CodeHawks (by Cyfrin) is a competitive smart contract audit platform.
+The __data.json endpoint is unreliable; Playwright rendering is required.
+
+Body text pattern (after header row):
+  rank (digit-only line)
+  username (next line)
+  $earnings\txp\thigh\tmedium\tlow (tab-separated line)
 """
+
+import re
 
 from phoenix.core.logging import get_logger
 from phoenix.models.researcher import PlatformProfile, ProfileSnapshot
-from phoenix.scrapers.base import ApiScraper, LeaderboardEntry
+from phoenix.scrapers.base import LeaderboardEntry, PlaywrightScraper
 from phoenix.scrapers.registry import register_scraper
 from phoenix.scrapers.utils.normalizer import extract_social_links
-from phoenix.scrapers.utils.retry import scrape_retry
 
 log = get_logger(__name__)
 
-BASE_URL = "https://codehawks.cyfrin.io"
-API_PATHS = [
-    f"{BASE_URL}/api/leaderboard",
-    f"{BASE_URL}/api/v1/leaderboard",
-    "https://api.codehawks.cyfrin.io/leaderboard",
-    "https://api.codehawks.cyfrin.io/v1/leaderboard",
-]
+BASE_URL = "https://www.codehawks.com"
+LEADERBOARD_URL = f"{BASE_URL}/leaderboard"
 
 
 @register_scraper("codehawks")
-class CodeHawksScraper(ApiScraper):
+class CodeHawksScraper(PlaywrightScraper):
     platform_name = "codehawks"
 
-    @scrape_retry
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        items: list[dict] = []
-
-        for path in API_PATHS:
-            try:
-                resp = await self._get(path, params={"limit": max_entries, "page": 1})
-                data = resp.json()
-                if isinstance(data, list):
-                    items = data
-                else:
-                    for key in ("data", "results", "leaderboard", "hawks", "auditors"):
-                        if key in data and isinstance(data[key], list):
-                            items = data[key]
-                            break
-                if items:
-                    break
-            except Exception:
-                continue
-
-        if not items:
-            log.warning("codehawks_no_leaderboard_data")
-            return []
-
+        page = await self._new_page()
         entries: list[LeaderboardEntry] = []
-        for i, item in enumerate(items[:max_entries]):
-            username = (
-                item.get("handle")
-                or item.get("username")
-                or item.get("hawk")
-                or item.get("name", "")
-            )
-            if not username:
-                continue
-            entries.append(
-                LeaderboardEntry(
-                    username=username,
-                    rank=item.get("rank", i + 1),
-                    score=item.get("totalPayout", item.get("xp", item.get("score"))),
-                    profile_url=f"{BASE_URL}/profile/{username}",
-                    extra={
-                        k: item[k]
-                        for k in ("highFindings", "mediumFindings", "lowFindings", "contests", "xp")
-                        if k in item
-                    },
+
+        try:
+            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
+            await self._dismiss_cookies(page)
+            body = await self._get_body_text(page)
+
+            lines = [l.strip() for l in body.split("\n") if l.strip()]
+
+            # Pattern: digit-only line (rank), username line, then
+            # tab-separated "$earnings\txp\thigh\tmedium\tlow" line
+            i = 0
+            while i < len(lines) and len(entries) < max_entries:
+                # Look for rank (digit-only line)
+                if not re.match(r"^\d+$", lines[i]):
+                    i += 1
+                    continue
+
+                rank = int(lines[i])
+
+                # Next line is username
+                if i + 1 >= len(lines):
+                    break
+                username = lines[i + 1]
+                if re.match(r"^\d+$", username) or username.startswith("$"):
+                    i += 1
+                    continue
+
+                # Next line has tab-separated data: $earnings\txp\thigh\tmedium\tlow
+                score = None
+                earnings = None
+                raw_data: dict = {}
+                if i + 2 < len(lines):
+                    data_line = lines[i + 2]
+                    parts = re.split(r"\t+", data_line)
+                    if parts and parts[0].startswith("$"):
+                        earn_match = re.match(r"\$([\d,]+(?:\.\d+)?)", parts[0])
+                        if earn_match:
+                            earnings = float(earn_match.group(1).replace(",", ""))
+                            score = earnings
+                    if len(parts) >= 2:
+                        try:
+                            raw_data["xp"] = int(parts[1])
+                        except ValueError:
+                            pass
+
+                entries.append(
+                    LeaderboardEntry(
+                        username=username,
+                        rank=rank,
+                        score=score,
+                        profile_url=f"{BASE_URL}/profile/{username}",
+                    )
                 )
-            )
+
+                # Skip past this block (3 lines per entry)
+                i += 3
+
+            log.info("codehawks_leaderboard_parsed", count=len(entries))
+
+        finally:
+            await page.context.close()
 
         return entries
 
-    @scrape_retry
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
-        user: dict = {}
+        page = await self._new_page()
 
-        profile_paths = [
-            f"{BASE_URL}/api/users/{username}",
-            f"{BASE_URL}/api/v1/users/{username}",
-            f"{BASE_URL}/api/hawks/{username}",
-            f"https://api.codehawks.cyfrin.io/users/{username}",
-        ]
+        try:
+            profile_url = f"{BASE_URL}/profile/{username}"
+            await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+            await self._dismiss_cookies(page)
+            body = await self._get_body_text(page)
 
-        for path in profile_paths:
-            try:
-                resp = await self._get(path)
-                data = resp.json()
-                user = data.get("data", data) if isinstance(data, dict) else {}
-                if user.get("handle") or user.get("username"):
-                    break
-                user = {}
-            except Exception:
-                continue
+            raw_data: dict = {}
+            rank = None
+            score = None
+            finding_count = None
+            total_earnings = None
 
-        if not user:
-            raise ValueError(f"CodeHawks profile not found: {username}")
+            earn_match = re.search(r"\$([\d,]+(?:\.\d+)?)", body)
+            if earn_match:
+                total_earnings = float(earn_match.group(1).replace(",", ""))
+                score = total_earnings
+                raw_data["earnings"] = total_earnings
 
-        bio = user.get("bio", "") or ""
-        urls = [user[k] for k in ("github", "twitter", "website") if user.get(k)]
-        social_links = extract_social_links(bio, urls)
+            rank_match = re.search(r"(?:rank|position)\s*\n?\s*#?(\d+)", body, re.IGNORECASE)
+            if rank_match:
+                rank = int(rank_match.group(1))
+                raw_data["rank"] = rank
 
-        profile = PlatformProfile(
-            platform_name=self.platform_name,
-            username=username,
-            display_name=user.get("name", user.get("displayName", "")),
-            bio=bio,
-            location=user.get("location", ""),
-            profile_url=f"{BASE_URL}/profile/{username}",
-            social_links=social_links,
-            badges=[str(b) for b in user.get("badges", [])],
-            skill_tags=user.get("skills", user.get("languages", [])),
-        )
+            find_match = re.search(r"(?:findings?|high\s*risk|med\s*risk)\s*\n?\s*(\d+)", body, re.IGNORECASE)
+            if find_match:
+                finding_count = int(find_match.group(1))
+                raw_data["findings"] = finding_count
 
-        snapshot = ProfileSnapshot(
-            profile_id=profile.id,
-            overall_score=user.get("totalPayout", user.get("xp", user.get("score"))),
-            global_rank=user.get("rank"),
-            finding_count=user.get("totalFindings"),
-            total_earnings=user.get("totalPayout"),
-            raw_data={
-                k: user[k]
-                for k in ("highFindings", "mediumFindings", "lowFindings", "contests", "xp", "level")
-                if k in user
-            },
-        )
+            external_links = await self._get_all_links(page, exclude_domain="codehawks.com")
+            social_links = extract_social_links(body, external_links)
 
-        return profile, snapshot
+            profile = PlatformProfile(
+                platform_name=self.platform_name,
+                username=username,
+                display_name=username,
+                bio="",
+                profile_url=profile_url,
+                social_links=social_links,
+            )
+
+            snapshot = ProfileSnapshot(
+                profile_id=profile.id,
+                overall_score=score,
+                global_rank=rank,
+                finding_count=finding_count,
+                total_earnings=total_earnings,
+                raw_data=raw_data,
+            )
+
+            return profile, snapshot
+
+        finally:
+            await page.context.close()

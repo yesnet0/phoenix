@@ -1,146 +1,192 @@
-"""Huntr scraper — Tier 1 (Next.js/REST API).
+"""Huntr scraper — Tier 3 (Playwright, Next.js RSC).
 
 Huntr is a security vulnerability bounty platform focused on open source.
-Built with Next.js, likely has API or _next/data endpoints.
+It uses Next.js React Server Components with no traditional API or
+__NEXT_DATA__. Playwright is required.
+
+RSC hydration note: The leaderboard table renders skeleton rows immediately,
+then hydrates each user's data via individual POST requests to /leaderboard.
+Stealth UA/viewport settings break this hydration, so we use a plain browser
+context for the leaderboard scrape. Each row takes ~1.5s to hydrate, so we
+poll until enough rows are filled.
 """
 
 import re
 
+from playwright.async_api import Page
+
 from phoenix.core.logging import get_logger
 from phoenix.models.researcher import PlatformProfile, ProfileSnapshot
-from phoenix.scrapers.base import ApiScraper, LeaderboardEntry
+from phoenix.scrapers.base import LeaderboardEntry, PlaywrightScraper
 from phoenix.scrapers.registry import register_scraper
 from phoenix.scrapers.utils.normalizer import extract_social_links
-from phoenix.scrapers.utils.retry import scrape_retry
 
 log = get_logger(__name__)
 
-BASE_URL = "https://huntr.dev"
+LEADERBOARD_URL = "https://huntr.com/leaderboard"
+PROFILE_BASE = "https://huntr.com/users"
 
 
 @register_scraper("huntr")
-class HuntrScraper(ApiScraper):
+class HuntrScraper(PlaywrightScraper):
     platform_name = "huntr"
 
-    async def _try_api_endpoints(self, path_variants: list[str], params: dict | None = None) -> dict | list | None:
-        """Try multiple API path patterns, return first successful JSON."""
-        for path in path_variants:
-            try:
-                resp = await self._get(f"{BASE_URL}{path}", params=params or {})
-                return resp.json()
-            except Exception:
-                continue
-        return None
+    async def _new_plain_page(self) -> Page:
+        """Create a page without stealth settings.
 
-    async def _try_nextjs_data(self, page_path: str) -> dict | None:
-        """Try to fetch data via Next.js _next/data route."""
-        try:
-            resp = await self._get(f"{BASE_URL}/{page_path}")
-            html = resp.text
-            build_match = re.search(r'"buildId"\s*:\s*"([^"]+)"', html)
-            if build_match:
-                build_id = build_match.group(1)
-                json_path = page_path.rstrip("/") or "index"
-                resp = await self._get(f"{BASE_URL}/_next/data/{build_id}/{json_path}.json")
-                return resp.json().get("pageProps", {})
-        except Exception:
-            log.debug("huntr_nextjs_fallback_failed", page=page_path)
-        return None
+        Huntr's RSC hydration fails with custom UA/viewport stealth
+        settings, so we use a plain browser context for reliability.
+        """
+        browser = await self._get_browser()
+        context = await browser.new_context()
+        page = await context.new_page()
+        return page
 
-    @scrape_retry
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        data = await self._try_api_endpoints(
-            [
-                "/api/leaderboard",
-                "/api/v1/leaderboard",
-                "/api/hackers/leaderboard",
-                "/api/users/leaderboard",
-            ],
-            params={"limit": max_entries},
-        )
-
-        if data is None:
-            nextjs = await self._try_nextjs_data("leaderboard")
-            if nextjs:
-                data = nextjs.get("leaderboard", nextjs.get("users", nextjs.get("data")))
-
-        if data is None:
-            log.warning("huntr_no_leaderboard_data")
-            return []
-
-        items = data if isinstance(data, list) else data.get("data", data.get("leaderboard", data.get("users", [])))
+        # Use plain page -- stealth breaks RSC hydration on huntr
+        page = await self._new_plain_page()
         entries: list[LeaderboardEntry] = []
 
-        for i, item in enumerate(items[:max_entries]):
-            username = item.get("username", item.get("handle", item.get("login", "")))
-            if not username:
-                continue
-            entries.append(
-                LeaderboardEntry(
-                    username=username,
-                    rank=item.get("rank", i + 1),
-                    score=item.get("bounties", item.get("score", item.get("points"))),
-                    profile_url=f"{BASE_URL}/users/{username}",
-                    extra={
-                        k: item[k]
-                        for k in ("disclosures", "cves", "fixCount", "severity_breakdown")
-                        if k in item
-                    },
+        try:
+            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
+
+            # Wait for first td to be attached (RSC starts streaming)
+            # Note: use state="attached" because headless mode may not
+            # consider elements "visible" even when present in DOM
+            try:
+                await page.wait_for_selector("td", state="attached", timeout=20000)
+            except Exception:
+                log.warning("huntr_no_table_data", msg="No td elements appeared within 20s")
+                return entries
+
+            # Poll until enough rows have hydrated names (RSC loads lazily)
+            target = min(max_entries, 25)
+            for _ in range(15):
+                await page.wait_for_timeout(2000)
+                rows = await page.query_selector_all("tr")
+                filled = 0
+                for row in rows[1:]:  # skip header
+                    tds = await row.query_selector_all("td")
+                    if len(tds) >= 2:
+                        name_text = await tds[1].inner_text()
+                        if name_text.strip():
+                            filled += 1
+                if filled >= target:
+                    break
+
+            # Parse hydrated rows: [rank, "display_name\n@username", status, accuracy, xp]
+            rows = await page.query_selector_all("tr")
+            for row in rows[1:]:  # skip header
+                tds = await row.query_selector_all("td")
+                if len(tds) < 5:
+                    continue
+
+                rank_text = (await tds[0].inner_text()).strip()
+                name_text = (await tds[1].inner_text()).strip()
+                status_text = (await tds[2].inner_text()).strip()
+                acc_text = (await tds[3].inner_text()).strip()
+                xp_text = (await tds[4].inner_text()).strip()
+
+                if not name_text or not rank_text.isdigit():
+                    continue
+
+                rank = int(rank_text)
+
+                # Parse "display_name\n\n@username" or "display_name@username"
+                username_match = re.search(r"@(\S+)", name_text)
+                if not username_match:
+                    continue
+                username = username_match.group(1)
+                display_name = re.split(r"\n|@", name_text)[0].strip()
+
+                # Parse XP score
+                score = None
+                try:
+                    score = float(xp_text.replace(",", ""))
+                except ValueError:
+                    pass
+
+                extra = {}
+                if status_text:
+                    extra["status"] = status_text
+                acc_match = re.match(r"(\d+)%", acc_text)
+                if acc_match:
+                    extra["accuracy"] = int(acc_match.group(1))
+                if display_name and display_name != username:
+                    extra["display_name"] = display_name
+
+                entries.append(
+                    LeaderboardEntry(
+                        username=username,
+                        rank=rank,
+                        score=score,
+                        profile_url=f"{PROFILE_BASE}/{username}",
+                        extra=extra,
+                    )
                 )
-            )
+
+                if len(entries) >= max_entries:
+                    break
+
+            log.info("huntr_leaderboard_parsed", count=len(entries))
+
+        finally:
+            await page.context.close()
 
         return entries
 
-    @scrape_retry
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
-        data = await self._try_api_endpoints(
-            [
-                f"/api/users/{username}",
-                f"/api/v1/users/{username}",
-                f"/api/hackers/{username}",
-            ],
-        )
+        page = await self._new_page()
 
-        if data is None:
-            nextjs = await self._try_nextjs_data(f"users/{username}")
-            if nextjs:
-                data = nextjs.get("user", nextjs.get("profile", nextjs))
+        try:
+            profile_url = f"{PROFILE_BASE}/{username}"
+            await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+            await self._dismiss_cookies(page)
+            body = await self._get_body_text(page)
 
-        if not data or (isinstance(data, dict) and not (data.get("username") or data.get("handle"))):
-            user = data if isinstance(data, dict) else {}
-        else:
-            user = data.get("data", data) if isinstance(data, dict) else {}
+            raw_data: dict = {}
+            rank = None
+            score = None
+            finding_count = None
 
-        if not user:
-            raise ValueError(f"Huntr profile not found: {username}")
+            # Extract bounties/score
+            bounty_match = re.search(r"(?:bounties?|score|points|rewards?)\s*\n?\s*\$?([\d,]+(?:\.\d+)?)", body, re.IGNORECASE)
+            if bounty_match:
+                score = float(bounty_match.group(1).replace(",", ""))
+                raw_data["bounties"] = score
 
-        bio = user.get("bio", "") or ""
-        urls = [user[k] for k in ("website", "github", "twitter") if user.get(k)]
-        social_links = extract_social_links(bio, urls)
+            # Extract rank
+            rank_match = re.search(r"(?:rank|position)\s*\n?\s*#?(\d+)", body, re.IGNORECASE)
+            if rank_match:
+                rank = int(rank_match.group(1))
+                raw_data["rank"] = rank
 
-        profile = PlatformProfile(
-            platform_name=self.platform_name,
-            username=username,
-            display_name=user.get("name", user.get("displayName", "")),
-            bio=bio,
-            location=user.get("location", ""),
-            profile_url=f"{BASE_URL}/users/{username}",
-            social_links=social_links,
-            badges=[str(b) for b in user.get("badges", [])],
-            skill_tags=user.get("languages", user.get("skills", [])),
-            join_date=user.get("created_at", user.get("joinedAt")),
-        )
+            # Extract disclosure/vulnerability count
+            disc_match = re.search(r"(?:disclosures?|vulnerabilit|CVEs?|findings?)\s*\n?\s*(\d+)", body, re.IGNORECASE)
+            if disc_match:
+                finding_count = int(disc_match.group(1))
+                raw_data["disclosures"] = finding_count
 
-        snapshot = ProfileSnapshot(
-            profile_id=profile.id,
-            overall_score=user.get("bounties", user.get("score", user.get("points"))),
-            global_rank=user.get("rank"),
-            finding_count=user.get("disclosures", user.get("vulnerability_count")),
-            raw_data={
-                k: user[k]
-                for k in ("cves", "fixCount", "severity_breakdown", "total_bounty")
-                if k in user
-            },
-        )
+            external_links = await self._get_all_links(page, exclude_domain="huntr.com")
+            social_links = extract_social_links(body, external_links)
 
-        return profile, snapshot
+            profile = PlatformProfile(
+                platform_name=self.platform_name,
+                username=username,
+                display_name=username,
+                profile_url=profile_url,
+                social_links=social_links,
+            )
+
+            snapshot = ProfileSnapshot(
+                profile_id=profile.id,
+                overall_score=score,
+                global_rank=rank,
+                finding_count=finding_count,
+                raw_data=raw_data,
+            )
+
+            return profile, snapshot
+
+        finally:
+            await page.context.close()

@@ -2,6 +2,9 @@
 
 Leaderboard: https://hckrt.com/Profiles/Leaderboard
 Profile: https://hckrt.com/Profiles/{username}
+
+The leaderboard requires authentication. Scraping is not possible
+without logged-in session credentials.
 """
 
 import re
@@ -23,50 +26,10 @@ class HackrateScraper(PlaywrightScraper):
     platform_name = "hackrate"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        page = await self._new_page()
-        entries: list[LeaderboardEntry] = []
-
-        try:
-            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
-            await self._dismiss_cookies(page)
-            body = await self._get_body_text(page)
-
-            lines = [l.strip() for l in body.split("\n") if l.strip()]
-
-            for i, line in enumerate(lines):
-                rank_match = re.match(r"^#?(\d+)$", line)
-                if rank_match and i + 1 < len(lines):
-                    rank = int(rank_match.group(1))
-                    username = lines[i + 1].strip()
-                    if not username or re.match(r"^[\d#]", username):
-                        continue
-
-                    score = None
-                    for offset in range(2, 5):
-                        if i + offset < len(lines):
-                            score_match = re.match(r"^([\d,]+)\s*(?:pts|points|rep)?$", lines[i + offset], re.I)
-                            if score_match:
-                                score = float(score_match.group(1).replace(",", ""))
-                                break
-
-                    entries.append(
-                        LeaderboardEntry(
-                            username=username,
-                            rank=rank,
-                            score=score,
-                            profile_url=f"{PROFILE_BASE}/{username}",
-                        )
-                    )
-
-                    if len(entries) >= max_entries:
-                        break
-
-            log.info("hackrate_leaderboard_scraped", entries=len(entries))
-
-        finally:
-            await page.context.close()
-
-        return entries
+        raise ConnectionError(
+            "Hackrate leaderboard requires authentication. "
+            "Cannot scrape without logged-in session credentials."
+        )
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         page = await self._new_page()

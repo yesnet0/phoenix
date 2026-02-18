@@ -23,6 +23,16 @@ class CertikScraper(PlaywrightScraper):
     platform_name = "certik"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
+        """CertiK is behind Cloudflare challenge — blocked in headless mode."""
+        log.warning(
+            "certik_cloudflare_blocked",
+            msg="CertiK leaderboard is behind Cloudflare challenge. "
+            "Requires stealth browser or captcha-solving integration.",
+        )
+        return []
+
+    async def _scrape_leaderboard_impl(self, max_entries: int = 100) -> list[LeaderboardEntry]:
+        """Original implementation — kept for when Cloudflare bypass is available."""
         page = await self._new_page()
         entries: list[LeaderboardEntry] = []
 

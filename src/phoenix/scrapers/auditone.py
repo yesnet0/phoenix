@@ -1,6 +1,13 @@
 """AuditOne scraper — Tier 3 (Playwright, Web3 SPA).
 
-Leaderboard: https://auditone.io/bounty-activity
+AuditOne does NOT have a public researcher/hacker leaderboard.
+The /bounty-activity page lists open bounty programs (projects), not researchers.
+The /auditors page is informational only (no individual rankings).
+
+This scraper is kept as a stub. If AuditOne adds a researcher leaderboard
+in the future, implement _scrape_leaderboard_impl.
+
+Leaderboard: N/A (no public researcher leaderboard)
 Profile: https://auditone.io/researcher/{username}
 """
 
@@ -14,7 +21,6 @@ from phoenix.scrapers.utils.normalizer import extract_social_links
 
 log = get_logger(__name__)
 
-LEADERBOARD_URL = "https://auditone.io/bounty-activity"
 PROFILE_BASE = "https://auditone.io/researcher"
 
 
@@ -23,59 +29,18 @@ class AuditoneScraper(PlaywrightScraper):
     platform_name = "auditone"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        page = await self._new_page()
-        entries: list[LeaderboardEntry] = []
+        """AuditOne has no public researcher leaderboard.
 
-        try:
-            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
-            await self._dismiss_cookies(page)
-            body = await self._get_body_text(page, wait_ms=8000)
-
-            lines = [l.strip() for l in body.split("\n") if l.strip()]
-
-            for i, line in enumerate(lines):
-                rank_match = re.match(r"^#?(\d+)$", line)
-                if rank_match and i + 1 < len(lines):
-                    rank = int(rank_match.group(1))
-                    username = lines[i + 1].strip()
-                    if not username or re.match(r"^[\d#]", username):
-                        continue
-
-                    # Web3 platforms may show wallet-style addresses
-                    if username.startswith("0x") and len(username) > 20:
-                        # Truncated wallet address as username
-                        pass
-
-                    score = None
-                    for offset in range(2, 5):
-                        if i + offset < len(lines):
-                            score_match = re.match(
-                                r"^[\$]?([\d,]+(?:\.\d+)?)\s*(?:pts|points|bounty)?$",
-                                lines[i + offset],
-                                re.I,
-                            )
-                            if score_match:
-                                score = float(score_match.group(1).replace(",", ""))
-                                break
-
-                    entries.append(
-                        LeaderboardEntry(
-                            username=username,
-                            rank=rank,
-                            score=score,
-                            profile_url=f"{PROFILE_BASE}/{username}",
-                        )
-                    )
-
-                    if len(entries) >= max_entries:
-                        break
-
-            log.info("auditone_leaderboard_scraped", entries=len(entries))
-
-        finally:
-            await page.context.close()
-
-        return entries
+        The /bounty-activity page lists open bounty programs (projects),
+        not security researchers. Returning empty until a researcher
+        ranking page becomes available.
+        """
+        log.warning(
+            "auditone_no_researcher_leaderboard",
+            msg="AuditOne does not expose a public researcher leaderboard. "
+            "The /bounty-activity page lists bounty programs, not researchers.",
+        )
+        return []
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         page = await self._new_page()

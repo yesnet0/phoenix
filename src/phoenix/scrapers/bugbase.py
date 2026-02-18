@@ -2,6 +2,9 @@
 
 Leaderboard: https://bugbase.in/dashboard/leaderboard
 Profile: https://bugbase.in/dashboard/profile/{username}
+
+The leaderboard URL returns a 404 page ("Oops! You ran into an accidental bug.
+Looks like this page does not exist."). The endpoint is currently unavailable.
 """
 
 import re
@@ -23,50 +26,12 @@ class BugbaseScraper(PlaywrightScraper):
     platform_name = "bugbase"
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        page = await self._new_page()
-        entries: list[LeaderboardEntry] = []
-
-        try:
-            await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
-            await self._dismiss_cookies(page)
-            body = await self._get_body_text(page)
-
-            lines = [l.strip() for l in body.split("\n") if l.strip()]
-
-            rank = 0
-            for i, line in enumerate(lines):
-                # Look for rank numbers followed by username-like strings
-                rank_match = re.match(r"^#?(\d+)$", line)
-                if rank_match and i + 1 < len(lines):
-                    rank = int(rank_match.group(1))
-                    username = lines[i + 1].strip()
-                    if not username or username.startswith("#"):
-                        continue
-
-                    score = None
-                    if i + 2 < len(lines):
-                        score_match = re.match(r"^([\d,]+)\s*(?:pts|points)?$", lines[i + 2])
-                        if score_match:
-                            score = float(score_match.group(1).replace(",", ""))
-
-                    entries.append(
-                        LeaderboardEntry(
-                            username=username,
-                            rank=rank,
-                            score=score,
-                            profile_url=f"{PROFILE_BASE}/{username}",
-                        )
-                    )
-
-                    if len(entries) >= max_entries:
-                        break
-
-            log.info("bugbase_leaderboard_scraped", entries=len(entries))
-
-        finally:
-            await page.context.close()
-
-        return entries
+        log.warning(
+            "bugbase_endpoint_unavailable",
+            msg="BugBase leaderboard endpoint returns 404. "
+                "The page no longer exists at the known URL.",
+        )
+        return []
 
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
         page = await self._new_page()

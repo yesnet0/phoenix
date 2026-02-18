@@ -2,6 +2,9 @@
 
 Leaderboard: https://app.bugbounter.com/public-top-bounters
 Profile: https://app.bugbounter.com/researcher/{username}
+
+Body text pattern (after "Reputation" header):
+  Triplets of: rank_number, username, score
 """
 
 import re
@@ -29,38 +32,54 @@ class BugbounterScraper(PlaywrightScraper):
         try:
             await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
             await self._dismiss_cookies(page)
-            body = await self._get_body_text(page)
+            # SPA takes 10-15s to render leaderboard data after headers load
+            body = await self._get_body_text(page, wait_ms=15000)
 
             lines = [l.strip() for l in body.split("\n") if l.strip()]
 
-            rank = 0
-            for i, line in enumerate(lines):
-                rank_match = re.match(r"^#?(\d+)$", line)
-                if rank_match and i + 1 < len(lines):
-                    rank = int(rank_match.group(1))
-                    username = lines[i + 1].strip()
-                    if not username or re.match(r"^[\d#]", username):
-                        continue
+            # Find the "Reputation" header marker
+            start_idx = 0
+            for idx, line in enumerate(lines):
+                if line == "Reputation":
+                    start_idx = idx + 1
+                    break
 
-                    score = None
-                    for offset in range(2, 5):
-                        if i + offset < len(lines):
-                            score_match = re.match(r"^([\d,]+)\s*(?:pts|points|bounty)?$", lines[i + offset], re.I)
-                            if score_match:
-                                score = float(score_match.group(1).replace(",", ""))
-                                break
+            if start_idx == 0:
+                log.warning("bugbounter_no_reputation_header_found")
+                return entries
 
-                    entries.append(
-                        LeaderboardEntry(
-                            username=username,
-                            rank=rank,
-                            score=score,
-                            profile_url=f"{PROFILE_BASE}/{username}",
-                        )
+            # After "Reputation", data comes in triplets: rank, username, score
+            i = start_idx
+            while i + 2 < len(lines) and len(entries) < max_entries:
+                # rank line (digit only)
+                if not re.match(r"^\d+$", lines[i]):
+                    i += 1
+                    continue
+
+                rank = int(lines[i])
+                username = lines[i + 1]
+
+                # Validate username is not a number
+                if re.match(r"^\d+$", username):
+                    i += 1
+                    continue
+
+                # Score line
+                score = None
+                score_match = re.match(r"^([\d,]+)$", lines[i + 2])
+                if score_match:
+                    score = float(score_match.group(1).replace(",", ""))
+
+                entries.append(
+                    LeaderboardEntry(
+                        username=username,
+                        rank=rank,
+                        score=score,
+                        profile_url=f"{PROFILE_BASE}/{username}",
                     )
+                )
 
-                    if len(entries) >= max_entries:
-                        break
+                i += 3
 
             log.info("bugbounter_leaderboard_scraped", entries=len(entries))
 

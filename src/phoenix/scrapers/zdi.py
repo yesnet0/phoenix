@@ -1,7 +1,8 @@
 """ZDI (Zero Day Initiative) scraper — Tier 2 (HTML parsing).
 
-ZDI publishes advisories and tracks researchers by their contributions.
-No public API — scrape HTML with httpx and parse with regex.
+ZDI publishes advisories at zerodayinitiative.com/advisories/published/.
+The page contains an HTML table with advisory data. ZDI tracks advisories,
+not researcher leaderboards directly.
 """
 
 import re
@@ -11,7 +12,6 @@ from phoenix.core.logging import get_logger
 from phoenix.models.researcher import PlatformProfile, ProfileSnapshot
 from phoenix.scrapers.base import ApiScraper, LeaderboardEntry
 from phoenix.scrapers.registry import register_scraper
-from phoenix.scrapers.utils.normalizer import extract_social_links
 from phoenix.scrapers.utils.retry import scrape_retry
 
 log = get_logger(__name__)
@@ -21,7 +21,7 @@ BASE_URL = "https://www.zerodayinitiative.com"
 
 @register_scraper("zdi")
 class ZdiScraper(ApiScraper):
-    """HTML-tier scraper for ZDI advisories and researcher rankings."""
+    """HTML-tier scraper for ZDI advisories."""
 
     platform_name = "zdi"
 
@@ -31,162 +31,118 @@ class ZdiScraper(ApiScraper):
 
     @scrape_retry
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        """Scrape the ZDI researcher rankings from published advisories.
+        """Parse the advisories table from the published advisories page.
 
-        ZDI does not have a traditional leaderboard. We aggregate researcher
-        names from the advisories listing and rank by advisory count.
+        Each row has TDs: advisory_id, zdi_can, vendor, cve, cvss_score,
+        published_date, updated_date, description_link.
+        Returns advisory IDs as entries.
         """
-        researcher_counts: dict[str, int] = {}
-        entries: list[LeaderboardEntry] = []
-
-        # Try the researcher/ranking page first
-        ranking_urls = [
-            f"{BASE_URL}/advisories/published/",
-            f"{BASE_URL}/blog/published-advisories/",
-        ]
-
-        for url in ranking_urls:
-            try:
-                resp = await self._get(url)
-                html = resp.text
-                break
-            except Exception:
-                html = ""
-                continue
-
-        if not html:
-            log.warning("zdi_no_advisory_page")
+        try:
+            resp = await self._get(f"{BASE_URL}/advisories/published/")
+            html = resp.text
+        except Exception as e:
+            log.warning("zdi_advisories_page_failed", error=str(e))
             return []
 
-        # Extract researcher names from advisory entries
-        # Common patterns: "Reported by: Name" or "Credit: Name" or researcher name in table
-        credit_patterns = [
-            re.compile(
-                r'(?:reported\s+by|credit(?:ed)?(?:\s+to)?|discovered\s+by|researcher)\s*:?\s*'
-                r'(?:<[^>]+>)*\s*([^<\n]{2,80})',
-                re.IGNORECASE,
-            ),
-            re.compile(
-                r'class=["\']?(?:researcher|credit|reporter)["\']?[^>]*>\s*([^<]+)',
-                re.IGNORECASE,
-            ),
-        ]
+        entries: list[LeaderboardEntry] = []
 
-        for pattern in credit_patterns:
-            for match in pattern.finditer(html):
-                name = match.group(1).strip().rstrip(",.")
-                if name and len(name) > 1 and not name.startswith("http"):
-                    researcher_counts[name] = researcher_counts.get(name, 0) + 1
-
-        # Also try to find a dedicated ranking table
-        table_pattern = re.compile(
-            r'<tr[^>]*>.*?<td[^>]*>\s*(\d+)\s*</td>\s*'
-            r'<td[^>]*>\s*(?:<[^>]+>)*\s*([^<]+)',
+        # Parse table rows for advisory data
+        # Look for ZDI advisory ID pattern in table cells
+        row_pattern = re.compile(
+            r'<tr[^>]*>\s*'
+            r'<td[^>]*>\s*(?:<a[^>]*>)?\s*(ZDI-\d{2}-\d+)\s*(?:</a>)?\s*</td>\s*'
+            r'<td[^>]*>\s*(.*?)\s*</td>\s*'  # zdi_can
+            r'<td[^>]*>\s*(.*?)\s*</td>\s*'  # vendor
+            r'<td[^>]*>\s*(.*?)\s*</td>',     # cve
             re.DOTALL | re.IGNORECASE,
         )
-        for match in table_pattern.finditer(html):
-            rank_str = match.group(1).strip()
-            name = match.group(2).strip()
-            if name and name.lower() not in ("rank", "name", "researcher"):
-                try:
-                    researcher_counts[name] = max(
-                        researcher_counts.get(name, 0),
-                        int(rank_str),
-                    )
-                except ValueError:
-                    pass
 
-        # Sort by advisory count descending
-        sorted_researchers = sorted(
-            researcher_counts.items(),
-            key=lambda x: x[1],
-            reverse=True,
-        )
+        for i, match in enumerate(row_pattern.finditer(html)):
+            if len(entries) >= max_entries:
+                break
 
-        for i, (name, count) in enumerate(sorted_researchers[:max_entries]):
-            # Create a URL-safe slug
-            slug = re.sub(r'[^a-zA-Z0-9]+', '-', name.lower()).strip('-')
+            advisory_id = match.group(1).strip()
+            vendor = re.sub(r'<[^>]+>', '', match.group(3)).strip()
+            cve = re.sub(r'<[^>]+>', '', match.group(4)).strip()
+
             entries.append(
                 LeaderboardEntry(
-                    username=name,
+                    username=advisory_id,
                     rank=i + 1,
-                    score=float(count),
-                    profile_url=f"{BASE_URL}/advisories/published/?researcher={slug}",
-                    extra={"advisory_count": count},
+                    score=None,
+                    profile_url=f"{BASE_URL}/advisories/{advisory_id}/",
+                    extra={
+                        "vendor": vendor,
+                        "cve": cve,
+                    },
                 )
             )
 
+        # If the structured pattern didn't match, try a simpler approach
+        if not entries:
+            advisory_ids = re.findall(r'(ZDI-\d{2}-\d+)', html)
+            seen: set[str] = set()
+            for advisory_id in advisory_ids:
+                if advisory_id in seen:
+                    continue
+                seen.add(advisory_id)
+                if len(entries) >= max_entries:
+                    break
+                entries.append(
+                    LeaderboardEntry(
+                        username=advisory_id,
+                        rank=len(entries) + 1,
+                        score=None,
+                        profile_url=f"{BASE_URL}/advisories/{advisory_id}/",
+                    )
+                )
+
+        log.info("zdi_advisories_parsed", count=len(entries))
         return entries
 
     @scrape_retry
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
-        """Scrape ZDI advisory data for a specific researcher.
+        """Fetch an individual advisory page by its ZDI ID."""
+        try:
+            resp = await self._get(f"{BASE_URL}/advisories/{username}/")
+            html = resp.text
+        except Exception as e:
+            raise ValueError(f"ZDI advisory not found: {username} ({e})") from e
 
-        Since ZDI does not have profile pages, we search advisories by
-        researcher name and aggregate the data.
-        """
-        slug = re.sub(r'[^a-zA-Z0-9]+', '-', username.lower()).strip('-')
+        # Extract advisory details from the page
+        title_match = re.search(r'<h[12][^>]*>\s*(.+?)\s*</h', html, re.DOTALL | re.IGNORECASE)
+        title = re.sub(r'<[^>]+>', '', title_match.group(1)).strip() if title_match else username
 
-        # Try to fetch advisories filtered by researcher
-        html = ""
-        search_urls = [
-            f"{BASE_URL}/advisories/published/?researcher={slug}",
-            f"{BASE_URL}/advisories/published/?q={slug}",
-        ]
-
-        for url in search_urls:
-            try:
-                resp = await self._get(url)
-                html = resp.text
-                if username.lower() in html.lower():
-                    break
-            except Exception:
-                continue
-
-        if not html:
-            raise ValueError(f"ZDI researcher not found: {username}")
-
-        # Count advisories
-        advisory_pattern = re.compile(r'ZDI-\d{2}-\d+', re.IGNORECASE)
-        advisories = list(set(advisory_pattern.findall(html)))
-        advisory_count = len(advisories)
-
-        # Extract severity/type information
-        critical_pattern = re.compile(r'(?:critical|severity:\s*critical)', re.IGNORECASE)
-        high_pattern = re.compile(r'(?:high|severity:\s*high)', re.IGNORECASE)
-
-        critical_count = len(critical_pattern.findall(html))
-        high_count = len(high_pattern.findall(html))
-
-        # Extract any linked URLs
-        all_urls = re.findall(r'href=["\']?(https?://[^"\'>\s]+)', html)
-        social_links = extract_social_links("", all_urls)
-
-        # Try to get CVE IDs associated with this researcher
-        cve_pattern = re.compile(r'CVE-\d{4}-\d+', re.IGNORECASE)
+        # Extract CVE
+        cve_pattern = re.compile(r'(CVE-\d{4}-\d+)', re.IGNORECASE)
         cves = list(set(cve_pattern.findall(html)))
+
+        # Extract CVSS score
+        cvss_match = re.search(r'CVSS.*?(\d+\.?\d*)', html, re.IGNORECASE)
+        cvss_score = float(cvss_match.group(1)) if cvss_match else None
+
+        # Extract vendor
+        vendor_match = re.search(r'(?:vendor|affected)[^<]*?:\s*([^<]+)', html, re.IGNORECASE)
+        vendor = vendor_match.group(1).strip() if vendor_match else ""
 
         profile = PlatformProfile(
             platform_name=self.platform_name,
             username=username,
-            display_name=username,
-            bio=f"ZDI researcher with {advisory_count} published advisories",
-            profile_url=f"{BASE_URL}/advisories/published/?researcher={slug}",
-            social_links=social_links,
-            badges=[f"{advisory_count} advisories"],
+            display_name=title,
+            bio=f"ZDI Advisory {username}",
+            profile_url=f"{BASE_URL}/advisories/{username}/",
+            social_links=[],
         )
 
         snapshot = ProfileSnapshot(
             profile_id=profile.id,
-            overall_score=float(advisory_count),
-            finding_count=advisory_count,
-            critical_count=critical_count if critical_count else None,
-            high_count=high_count if high_count else None,
+            overall_score=cvss_score,
             raw_data={
-                "advisory_ids": advisories[:50],  # Cap stored IDs
-                "cve_ids": cves[:50],
-                "advisory_count": advisory_count,
-                "cve_count": len(cves),
+                "advisory_id": username,
+                "title": title,
+                "cves": cves,
+                "vendor": vendor,
+                "cvss_score": cvss_score,
             },
         )
 

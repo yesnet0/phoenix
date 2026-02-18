@@ -1,138 +1,88 @@
-"""HackenProof scraper — Tier 1 (REST API).
+"""HackenProof scraper — Tier 3 (Playwright, Cloudflare-protected).
 
-HackenProof is a Web3-focused bug bounty platform with a public leaderboard.
+HackenProof is a Web3-focused bug bounty platform. Even with Playwright,
+the site presents a Cloudflare challenge page requiring captcha solving.
+Leaderboard scraping is currently unavailable without stealth/captcha bypass.
 """
+
+import re
 
 from phoenix.core.logging import get_logger
 from phoenix.models.researcher import PlatformProfile, ProfileSnapshot
-from phoenix.scrapers.base import ApiScraper, LeaderboardEntry
+from phoenix.scrapers.base import LeaderboardEntry, PlaywrightScraper
 from phoenix.scrapers.registry import register_scraper
 from phoenix.scrapers.utils.normalizer import extract_social_links
-from phoenix.scrapers.utils.retry import scrape_retry
 
 log = get_logger(__name__)
 
-BASE_URL = "https://hackenproof.com"
-API_BASE = "https://hackenproof.com/api"
+LEADERBOARD_URL = "https://hackenproof.com/leaderboard"
+PROFILE_BASE = "https://hackenproof.com/hackers"
 
 
 @register_scraper("hackenproof")
-class HackenProofScraper(ApiScraper):
+class HackenProofScraper(PlaywrightScraper):
     platform_name = "hackenproof"
 
-    @scrape_retry
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
-        entries: list[LeaderboardEntry] = []
-        page = 1
-        per_page = min(max_entries, 50)
+        log.warning(
+            "hackenproof_cloudflare_blocked",
+            msg="HackenProof leaderboard is behind Cloudflare challenge. "
+                "Requires stealth browser or captcha-solving integration.",
+        )
+        return []
 
-        while len(entries) < max_entries:
-            resp = None
-            # Try versioned and unversioned API paths
-            for path in (
-                f"{API_BASE}/v1/leaderboard",
-                f"{API_BASE}/leaderboard",
-                f"{API_BASE}/v1/hackers/leaderboard",
-            ):
-                try:
-                    resp = await self._get(
-                        path,
-                        params={"page": page, "per_page": per_page},
-                    )
-                    break
-                except Exception:
-                    continue
-
-            if resp is None:
-                log.warning("hackenproof_leaderboard_no_api")
-                break
-
-            data = resp.json()
-            items = data if isinstance(data, list) else data.get("data", data.get("results", data.get("leaderboard", [])))
-
-            if not items:
-                break
-
-            for item in items:
-                username = item.get("username", item.get("handle", ""))
-                if not username:
-                    continue
-                entries.append(
-                    LeaderboardEntry(
-                        username=username,
-                        rank=item.get("rank", item.get("position")),
-                        score=item.get("reputation", item.get("score", item.get("points"))),
-                        profile_url=f"{BASE_URL}/hackers/{username}",
-                        extra={
-                            k: item[k]
-                            for k in ("bug_count", "reward_total", "country")
-                            if k in item
-                        },
-                    )
-                )
-                if len(entries) >= max_entries:
-                    break
-
-            # Pagination check
-            meta = data.get("meta", {}) if isinstance(data, dict) else {}
-            total_pages = meta.get("last_page", meta.get("total_pages", page))
-            if page >= total_pages:
-                break
-            page += 1
-
-        return entries
-
-    @scrape_retry
     async def scrape_profile(self, username: str) -> tuple[PlatformProfile, ProfileSnapshot]:
-        user: dict = {}
+        page = await self._new_page()
 
-        for path in (
-            f"{API_BASE}/v1/hackers/{username}",
-            f"{API_BASE}/hackers/{username}",
-            f"{API_BASE}/v1/users/{username}",
-        ):
-            try:
-                resp = await self._get(path)
-                data = resp.json()
-                user = data.get("data", data) if isinstance(data, dict) else {}
-                if user.get("username") or user.get("handle"):
-                    break
-                user = {}
-            except Exception:
-                continue
+        try:
+            profile_url = f"{PROFILE_BASE}/{username}"
+            await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+            await self._dismiss_cookies(page)
+            body = await self._get_body_text(page)
 
-        if not user:
-            raise ValueError(f"HackenProof profile not found: {username}")
+            raw_data: dict = {}
+            rank = None
+            score = None
+            finding_count = None
 
-        bio = user.get("bio", "") or ""
-        urls = [user[k] for k in ("website", "twitter_url", "github_url", "linkedin_url") if user.get(k)]
-        social_links = extract_social_links(bio, urls)
+            # Extract reputation/score
+            rep_match = re.search(r"(?:reputation|score|points)\s*\n?\s*([\d,]+)", body, re.IGNORECASE)
+            if rep_match:
+                score = float(rep_match.group(1).replace(",", ""))
+                raw_data["reputation"] = score
 
-        profile = PlatformProfile(
-            platform_name=self.platform_name,
-            username=username,
-            display_name=user.get("name", user.get("display_name", "")),
-            bio=bio,
-            location=user.get("country", user.get("location", "")),
-            profile_url=f"{BASE_URL}/hackers/{username}",
-            social_links=social_links,
-            badges=[str(b) for b in user.get("badges", [])],
-            skill_tags=user.get("skills", []),
-            join_date=user.get("created_at"),
-        )
+            # Extract rank
+            rank_match = re.search(r"(?:rank|position)\s*\n?\s*#?(\d+)", body, re.IGNORECASE)
+            if rank_match:
+                rank = int(rank_match.group(1))
+                raw_data["rank"] = rank
 
-        snapshot = ProfileSnapshot(
-            profile_id=profile.id,
-            overall_score=user.get("reputation", user.get("score", user.get("points"))),
-            global_rank=user.get("rank", user.get("position")),
-            finding_count=user.get("bug_count", user.get("report_count")),
-            total_earnings=user.get("reward_total", user.get("total_earned")),
-            acceptance_rate=user.get("acceptance_rate"),
-            raw_data={
-                k: user[k]
-                for k in ("critical_count", "high_count", "medium_count", "low_count", "streak")
-                if k in user
-            },
-        )
+            # Extract bug/report count
+            bug_match = re.search(r"(?:bugs?|reports?|findings?)\s*\n?\s*(\d+)", body, re.IGNORECASE)
+            if bug_match:
+                finding_count = int(bug_match.group(1))
+                raw_data["finding_count"] = finding_count
 
-        return profile, snapshot
+            external_links = await self._get_all_links(page, exclude_domain="hackenproof.com")
+            social_links = extract_social_links(body, external_links)
+
+            profile = PlatformProfile(
+                platform_name=self.platform_name,
+                username=username,
+                display_name=username,
+                profile_url=profile_url,
+                social_links=social_links,
+            )
+
+            snapshot = ProfileSnapshot(
+                profile_id=profile.id,
+                overall_score=score,
+                global_rank=rank,
+                finding_count=finding_count,
+                raw_data=raw_data,
+            )
+
+            return profile, snapshot
+
+        finally:
+            await page.context.close()

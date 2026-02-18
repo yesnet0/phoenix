@@ -33,21 +33,45 @@ class BugrapScraper(PlaywrightScraper):
 
             lines = [l.strip() for l in body.split("\n") if l.strip()]
 
-            for i, line in enumerate(lines):
-                rank_match = re.match(r"^#?(\d+)$", line)
-                if rank_match and i + 1 < len(lines):
-                    rank = int(rank_match.group(1))
-                    username = lines[i + 1].strip()
-                    if not username or re.match(r"^[\d#]", username):
-                        continue
+            # Format: username on one line, then "report_count\ttotal_score\trewards" on next
+            # Skip header line containing "WhiteHats"
+            i = 0
+            while i < len(lines):
+                if "WhiteHats" in lines[i] and "Report Count" in lines[i]:
+                    i += 1
+                    break
+                i += 1
 
+            rank = 0
+            while i < len(lines) - 1:
+                username = lines[i].strip()
+                # Stop at pagination or footer
+                if username.isdigit() and int(username) < 100:
+                    # Could be pagination numbers at the bottom
+                    if i + 1 < len(lines) and lines[i + 1].strip().isdigit():
+                        break
+                if "ALL RIGHTS" in username or "•••" in username:
+                    break
+
+                stats_line = lines[i + 1].strip()
+                parts = stats_line.split("\t")
+                if len(parts) >= 2:
+                    rank += 1
                     score = None
-                    for offset in range(2, 5):
-                        if i + offset < len(lines):
-                            score_match = re.match(r"^([\d,]+)\s*(?:pts|points|rep)?$", lines[i + offset], re.I)
-                            if score_match:
-                                score = float(score_match.group(1).replace(",", ""))
-                                break
+                    extra = {}
+                    try:
+                        extra["report_count"] = int(parts[0].replace(",", ""))
+                    except ValueError:
+                        pass
+                    try:
+                        score = float(parts[1].replace(",", ""))
+                    except ValueError:
+                        pass
+                    if len(parts) >= 3:
+                        try:
+                            extra["rewards_usdc"] = float(parts[2].replace(",", ""))
+                        except ValueError:
+                            pass
 
                     entries.append(
                         LeaderboardEntry(
@@ -55,11 +79,15 @@ class BugrapScraper(PlaywrightScraper):
                             rank=rank,
                             score=score,
                             profile_url=f"{PROFILE_BASE}/{username}",
+                            extra=extra,
                         )
                     )
+                    i += 2
 
                     if len(entries) >= max_entries:
                         break
+                else:
+                    i += 1
 
             log.info("bugrap_leaderboard_scraped", entries=len(entries))
 
