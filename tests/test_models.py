@@ -42,9 +42,13 @@ def test_researcher_defaults():
 
 
 def test_platforms_seed_data():
-    assert len(PLATFORMS) == 3
+    assert len(PLATFORMS) == 35
     names = {p.name for p in PLATFORMS}
-    assert names == {"hackerone", "bugcrowd", "intigriti"}
+    assert "hackerone" in names
+    assert "bugcrowd" in names
+    assert "intigriti" in names
+    # Verify all names are unique
+    assert len(names) == 35
 
 
 def test_scrape_job_defaults():

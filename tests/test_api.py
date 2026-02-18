@@ -26,6 +26,7 @@ def test_scrape_platforms(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "platforms" in data
+    assert len(data["platforms"]) == 35
     assert "hackerone" in data["platforms"]
     assert "bugcrowd" in data["platforms"]
     assert "intigriti" in data["platforms"]

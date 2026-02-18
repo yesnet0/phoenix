@@ -8,14 +8,11 @@ which are critical for identity resolution.
 
 import re
 
-from playwright.async_api import async_playwright, Browser, Page
-
 from phoenix.core.logging import get_logger
 from phoenix.models.researcher import PlatformProfile, ProfileSnapshot
-from phoenix.scrapers.base import LeaderboardEntry, PlatformScraper
+from phoenix.scrapers.base import LeaderboardEntry, PlaywrightScraper
 from phoenix.scrapers.registry import register_scraper
 from phoenix.scrapers.utils.normalizer import extract_social_links
-from phoenix.scrapers.utils.stealth import apply_stealth, random_ua, random_viewport
 from phoenix.scrapers.utils.timing import jittered_delay
 
 log = get_logger(__name__)
@@ -25,33 +22,8 @@ PROFILE_BASE = "https://app.intigriti.com/profile"
 
 
 @register_scraper("intigriti")
-class IntigritiScraper(PlatformScraper):
+class IntigritiScraper(PlaywrightScraper):
     platform_name = "intigriti"
-
-    def __init__(self) -> None:
-        self._pw = None
-        self._browser: Browser | None = None
-
-    async def _get_browser(self) -> Browser:
-        if self._browser is None:
-            self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-        return self._browser
-
-    async def _new_page(self) -> Page:
-        browser = await self._get_browser()
-        viewport = random_viewport()
-        context = await browser.new_context(
-            viewport=viewport,
-            user_agent=random_ua(),
-            locale="en-US",
-        )
-        page = await context.new_page()
-        await apply_stealth(page)
-        return page
 
     async def scrape_leaderboard(self, max_entries: int = 100) -> list[LeaderboardEntry]:
         page = await self._new_page()
@@ -61,14 +33,7 @@ class IntigritiScraper(PlatformScraper):
             await page.goto(LEADERBOARD_URL, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(5000)
 
-            # Click "Accept All" cookies if present
-            try:
-                accept = await page.query_selector("button:has-text('Accept All')")
-                if accept:
-                    await accept.click()
-                    await page.wait_for_timeout(1000)
-            except Exception:
-                pass
+            await self._dismiss_cookies(page)
 
             # Click "Show more" to load all entries
             for _ in range(10):
@@ -84,12 +49,9 @@ class IntigritiScraper(PlatformScraper):
 
             body = await page.inner_text("body")
 
-            # Parse leaderboard from text — format: "RANK\nRESEARCHER\nREPUTATION\nSTREAK\n1\nusername\n123pts\nLevel\n..."
-            # Find the table data section after the header
             lines = body.split("\n")
             lines = [l.strip() for l in lines if l.strip()]
 
-            # Find where the rank data starts (after "STREAK" header)
             start_idx = None
             for i, line in enumerate(lines):
                 if line == "STREAK":
@@ -99,7 +61,6 @@ class IntigritiScraper(PlatformScraper):
             if start_idx:
                 i = start_idx
                 while i < len(lines) and len(entries) < max_entries:
-                    # Pattern: rank_number, username, points, level
                     if lines[i].isdigit():
                         rank = int(lines[i])
                         if i + 2 < len(lines):
@@ -114,7 +75,7 @@ class IntigritiScraper(PlatformScraper):
                                     profile_url=f"{PROFILE_BASE}/{username}",
                                 )
                             )
-                            i += 4  # skip rank, username, pts, level
+                            i += 4
                             continue
                     i += 1
 
@@ -133,14 +94,7 @@ class IntigritiScraper(PlatformScraper):
             await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(5000)
 
-            # Dismiss cookies
-            try:
-                accept = await page.query_selector("button:has-text('Accept All')")
-                if accept:
-                    await accept.click()
-                    await page.wait_for_timeout(1000)
-            except Exception:
-                pass
+            await self._dismiss_cookies(page)
 
             body = await page.inner_text("body")
             raw_data: dict = {}
@@ -152,12 +106,10 @@ class IntigritiScraper(PlatformScraper):
             for i, line in enumerate(lines):
                 if line == username and i + 1 < len(lines):
                     next_line = lines[i + 1]
-                    # Location is a country/city, not a stat label
                     if next_line not in ("REP. 90 DAYS", "REP. ALL TIME") and "pts" not in next_line:
                         location = next_line
                     break
 
-            # Extract stats
             rep_90 = None
             rep_all = None
             rank = None
@@ -191,7 +143,6 @@ class IntigritiScraper(PlatformScraper):
             if raw_data.get("total"):
                 total = int(raw_data["total"])
 
-            # Extract skills
             skills: list[str] = []
             skill_section = re.search(r"Skills\n(.*?)(?:Industries|Achievements|Activity|$)", body, re.DOTALL)
             if skill_section:
@@ -200,12 +151,8 @@ class IntigritiScraper(PlatformScraper):
                     if line and line not in ("Show all", "Show all "):
                         skills.append(line)
 
-            # Extract external account links — critical for identity resolution
-            all_links = await page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            external_links = [
-                l for l in all_links
-                if not "intigriti" in l and l.startswith("http") and "cookieyes" not in l and "google" not in l
-            ]
+            external_links = await self._get_all_links(page, exclude_domain="intigriti")
+            external_links = [l for l in external_links if "cookieyes" not in l and "google" not in l]
             social_links = extract_social_links(body, external_links)
 
             profile = PlatformProfile(
@@ -235,9 +182,3 @@ class IntigritiScraper(PlatformScraper):
 
         finally:
             await page.context.close()
-
-    async def close(self) -> None:
-        if self._browser:
-            await self._browser.close()
-        if self._pw:
-            await self._pw.stop()

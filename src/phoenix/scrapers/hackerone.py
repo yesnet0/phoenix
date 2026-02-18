@@ -1,20 +1,17 @@
 """HackerOne scraper — Tier 1 (GraphQL API).
 
-Uses the HackerOne GraphQL endpoint with CSRF token auth.
+Uses the HackerOne GraphQL endpoint.
 Schema references:
   - github.com/Hacker0x01/helpful-recon-data/blob/master/schema.graphql
   - github.com/hackermondev/hackerone-tracker
 """
 
-import httpx
-
 from phoenix.core.logging import get_logger
 from phoenix.models.researcher import PlatformProfile, ProfileSnapshot, SocialLink, SocialPlatform
-from phoenix.scrapers.base import LeaderboardEntry, PlatformScraper
+from phoenix.scrapers.base import ApiScraper, LeaderboardEntry
 from phoenix.scrapers.registry import register_scraper
 from phoenix.scrapers.utils.normalizer import extract_social_links, normalize_handle
 from phoenix.scrapers.utils.retry import scrape_retry
-from phoenix.scrapers.utils.stealth import random_ua
 from phoenix.scrapers.utils.timing import jittered_delay
 
 log = get_logger(__name__)
@@ -81,26 +78,19 @@ query UserProfileQuery($username: String!) {
 
 
 @register_scraper("hackerone")
-class HackerOneScraper(PlatformScraper):
+class HackerOneScraper(ApiScraper):
     platform_name = "hackerone"
 
     def __init__(self) -> None:
-        self._client = httpx.AsyncClient(
-            headers={
-                "User-Agent": random_ua(),
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            timeout=30.0,
-            follow_redirects=True,
-        )
+        super().__init__()
+        self._client.headers["Content-Type"] = "application/json"
+
     @scrape_retry
     async def _graphql(self, query: str, variables: dict | None = None) -> dict:
-        resp = await self._client.post(
+        resp = await self._post(
             GRAPHQL_URL,
             json={"query": query, "variables": variables or {}},
         )
-        resp.raise_for_status()
         data = resp.json()
         if "errors" in data:
             log.warning("graphql_errors", errors=data["errors"])
@@ -216,6 +206,3 @@ class HackerOneScraper(PlatformScraper):
         )
 
         return profile, snapshot
-
-    async def close(self) -> None:
-        await self._client.aclose()

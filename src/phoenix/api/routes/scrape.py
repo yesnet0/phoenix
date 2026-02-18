@@ -1,7 +1,8 @@
 """Scrape trigger and status endpoints + Celery task."""
 
+import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, UTC
 
 from celery import shared_task
 from fastapi import APIRouter, HTTPException
@@ -13,12 +14,10 @@ from phoenix.core.tasks import app as celery_app
 from phoenix.identity.resolver import resolve_batch
 from phoenix.models.scrape import ScrapeResult, ScrapeStatus
 from phoenix.schema.queries import create_snapshot, upsert_profile
-from phoenix.scrapers.registry import get_scraper, list_scrapers
+from phoenix.scrapers.registry import discover_scrapers, get_scraper, list_scrapers
 
-# Ensure scrapers are registered when this module is imported (including by Celery workers)
-import phoenix.scrapers.hackerone  # noqa: F401
-import phoenix.scrapers.bugcrowd  # noqa: F401
-import phoenix.scrapers.intigriti  # noqa: F401
+# Auto-discover all scrapers when this module is imported (including by Celery workers)
+discover_scrapers()
 
 log = get_logger(__name__)
 router = APIRouter()
@@ -58,6 +57,48 @@ async def scrape_status(job_id: str):
 @router.get("/platforms")
 async def platforms():
     return {"platforms": list_scrapers()}
+
+
+@router.post("/health")
+async def scrape_health():
+    """Quick health check: try to instantiate each scraper and fetch its leaderboard with max_entries=1."""
+    results = {}
+
+    async def check_platform(name: str) -> dict:
+        try:
+            scraper = get_scraper(name)
+            try:
+                entries = await asyncio.wait_for(
+                    scraper.scrape_leaderboard(max_entries=1),
+                    timeout=30.0,
+                )
+                return {
+                    "status": "ok" if entries else "empty",
+                    "entries": len(entries),
+                    "checked_at": datetime.now(UTC).isoformat(),
+                }
+            except asyncio.TimeoutError:
+                return {"status": "timeout", "checked_at": datetime.now(UTC).isoformat()}
+            except Exception as e:
+                error_msg = str(e)
+                status = "captcha" if "captcha" in error_msg.lower() else "error"
+                return {"status": status, "error": error_msg, "checked_at": datetime.now(UTC).isoformat()}
+            finally:
+                await scraper.close()
+        except Exception as e:
+            return {"status": "error", "error": str(e), "checked_at": datetime.now(UTC).isoformat()}
+
+    # Run checks sequentially to avoid overwhelming resources
+    for name in list_scrapers():
+        results[name] = await check_platform(name)
+
+    ok_count = sum(1 for r in results.values() if r["status"] == "ok")
+    return {
+        "total": len(results),
+        "ok": ok_count,
+        "failing": len(results) - ok_count,
+        "platforms": results,
+    }
 
 
 @shared_task(name="phoenix.scrape", bind=True)

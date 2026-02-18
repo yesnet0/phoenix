@@ -6,25 +6,24 @@ from fastapi import FastAPI
 
 from phoenix.core.database import close_driver
 from phoenix.core.logging import setup_logging
-
-# Import scrapers to trigger registration
-import phoenix.scrapers.hackerone  # noqa: F401
-import phoenix.scrapers.bugcrowd  # noqa: F401
-import phoenix.scrapers.intigriti  # noqa: F401
+from phoenix.scrapers.registry import discover_scrapers
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+    discover_scrapers()
     yield
     await close_driver()
 
 
 def create_app() -> FastAPI:
+    discover_scrapers()
+
     app = FastAPI(
         title="Phoenix",
         description="Bug bounty researcher skills graph API",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
