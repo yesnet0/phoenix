@@ -25,6 +25,53 @@ AUTHORITATIVE_KEYS = {
     SocialPlatform.LINKEDIN,
 }
 
+# Platform-level social accounts that must NOT be used for identity resolution.
+# These are shared across all profiles on a platform and cause false merges.
+PLATFORM_ACCOUNTS: set[tuple[str, str]] = {
+    # Twitter/X accounts belonging to platforms
+    ("twitter", "immunefi"),
+    ("twitter", "asymmetric_re"),
+    ("twitter", "hackenproof"),
+    ("twitter", "yeswehack"),
+    ("twitter", "bugaborty"),
+    ("twitter", "code4rena"),
+    ("twitter", "codehawks"),
+    ("twitter", "sheraborty"),
+    ("twitter", "huntr_ai"),
+    ("twitter", "pabortystack"),
+    ("twitter", "safevuln"),
+    ("twitter", "bugcrowd"),
+    ("twitter", "intigriti"),
+    ("twitter", "hackerone"),
+    ("twitter", "vulbox"),
+    ("twitter", "hacktify"),
+    ("twitter", "hacktify_"),
+    ("twitter", "bugrapofficial"),
+    ("twitter", "habortyfinance"),
+    ("twitter", "chainlink"),
+    ("twitter", "starknet"),
+    ("twitter", "openzeppelin"),
+    ("twitter", "cantaborpen"),
+    ("twitter", "thegaborph"),
+    # GitHub accounts belonging to platforms
+    ("github", "immunefi"),
+    ("github", "cyfrin"),
+    ("github", "code-423n4"),
+    ("github", "sherlock-audit"),
+    ("github", "hats-finance"),
+    ("github", "huntr-dev"),
+    ("github", "patchstack"),
+    # Emails belonging to platforms
+    ("email", "info@hacktify.eu"),
+    ("email", "support@mail.safevuln.com"),
+    ("email", "partner@vulbox.com"),
+    ("email", "support@bugcrowd.com"),
+    ("email", "support@hackerone.com"),
+    ("email", "contact@yeswehack.com"),
+    ("email", "mkt@vulbox.com"),
+    ("email", "service@vulbox.com"),
+}
+
 
 async def resolve_identity(session: AsyncSession, profile: PlatformProfile) -> str | None:
     """Attempt to link a profile to a Researcher via exact social key matches.
@@ -43,6 +90,10 @@ async def resolve_identity(session: AsyncSession, profile: PlatformProfile) -> s
     # Search for matching profiles via each authoritative social key
     for link in profile.social_links:
         if link.platform not in AUTHORITATIVE_KEYS:
+            continue
+
+        # Skip platform-level social accounts (shared by all profiles on a platform)
+        if (link.platform.value, link.handle) in PLATFORM_ACCOUNTS:
             continue
 
         matches = await find_profiles_by_social(session, link.platform.value, link.handle)
