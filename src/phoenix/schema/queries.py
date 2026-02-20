@@ -1,5 +1,6 @@
 """Reusable Cypher query builders for Neo4j operations."""
 
+import json
 from datetime import UTC, datetime
 
 from neo4j import AsyncSession
@@ -107,7 +108,7 @@ async def create_snapshot(session: AsyncSession, snapshot: ProfileSnapshot) -> s
         signal_percentile=snapshot.signal_percentile,
         impact_percentile=snapshot.impact_percentile,
         acceptance_rate=snapshot.acceptance_rate,
-        raw_data=str(snapshot.raw_data),
+        raw_data=json.dumps(snapshot.raw_data),
     )
     return snapshot.id
 
@@ -247,3 +248,156 @@ async def search_profiles(session: AsyncSession, username: str) -> list[dict]:
         username=username,
     )
     return [dict(record) async for record in result]
+
+
+async def get_graph_data(session: AsyncSession) -> dict:
+    """Return nodes and edges for Sigma.js graph visualization."""
+    # Researcher nodes
+    r_result = await session.run(
+        """
+        MATCH (r:Researcher)
+        OPTIONAL MATCH (p:PlatformProfile)-[:BELONGS_TO]->(r)
+        RETURN r.id AS id, r.canonical_name AS label, r.composite_score AS score,
+               count(p) AS profile_count
+        """
+    )
+    researcher_nodes = []
+    async for rec in r_result:
+        researcher_nodes.append({
+            "id": rec["id"],
+            "label": rec["label"],
+            "type": "researcher",
+            "score": rec["score"],
+            "size": max(8, min(24, 8 + (rec["profile_count"] or 0) * 3)),
+        })
+
+    # Platform nodes
+    pl_result = await session.run(
+        """
+        MATCH (pl:Platform)
+        OPTIONAL MATCH (p:PlatformProfile)-[:ON_PLATFORM]->(pl)
+        RETURN pl.name AS id, pl.name AS label, count(p) AS profile_count
+        """
+    )
+    platform_nodes = []
+    async for rec in pl_result:
+        platform_nodes.append({
+            "id": f"platform:{rec['id']}",
+            "label": rec["label"],
+            "type": "platform",
+            "size": max(10, min(30, 10 + (rec["profile_count"] or 0))),
+        })
+
+    # Profile nodes + edges
+    p_result = await session.run(
+        """
+        MATCH (p:PlatformProfile)-[:ON_PLATFORM]->(pl:Platform)
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(r:Researcher)
+        RETURN p.id AS id, p.username AS label, p.platform_name AS platform,
+               r.id AS researcher_id
+        """
+    )
+    profile_nodes = []
+    edges = []
+    edge_id = 0
+    async for rec in p_result:
+        profile_nodes.append({
+            "id": rec["id"],
+            "label": rec["label"],
+            "type": "profile",
+            "platform": rec["platform"],
+            "size": 4,
+        })
+        edges.append({
+            "id": f"e{edge_id}",
+            "source": rec["id"],
+            "target": f"platform:{rec['platform']}",
+            "type": "on_platform",
+        })
+        edge_id += 1
+        if rec["researcher_id"]:
+            edges.append({
+                "id": f"e{edge_id}",
+                "source": rec["id"],
+                "target": rec["researcher_id"],
+                "type": "belongs_to",
+            })
+            edge_id += 1
+
+    return {
+        "nodes": researcher_nodes + platform_nodes + profile_nodes,
+        "edges": edges,
+    }
+
+
+async def get_analytics(session: AsyncSession) -> dict:
+    """Return aggregated dashboard statistics."""
+    counts_result = await session.run(
+        """
+        OPTIONAL MATCH (r:Researcher)
+        WITH count(r) AS researchers
+        OPTIONAL MATCH (p:PlatformProfile)
+        WITH researchers, count(p) AS profiles
+        OPTIONAL MATCH (pl:Platform)
+        WITH researchers, profiles, count(pl) AS platforms
+        OPTIONAL MATCH (s:ProfileSnapshot)
+        WITH researchers, profiles, platforms, count(s) AS snapshots
+        OPTIONAL MATCH (sl:SocialLink)
+        RETURN researchers, profiles, platforms, snapshots, count(sl) AS social_links
+        """
+    )
+    counts_rec = await counts_result.single()
+    counts = dict(counts_rec)
+
+    top_score_result = await session.run(
+        """
+        MATCH (r:Researcher)
+        OPTIONAL MATCH (p:PlatformProfile)-[:BELONGS_TO]->(r)
+        RETURN r.id AS id, r.canonical_name AS name, r.composite_score AS score,
+               count(p) AS platform_count
+        ORDER BY r.composite_score DESC
+        LIMIT 10
+        """
+    )
+    top_by_score = [dict(rec) async for rec in top_score_result]
+
+    top_earnings_result = await session.run(
+        """
+        MATCH (r:Researcher)<-[:BELONGS_TO]-(p:PlatformProfile)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
+        WHERE s.total_earnings IS NOT NULL
+        WITH r, sum(s.total_earnings) AS total_earnings
+        RETURN r.id AS id, r.canonical_name AS name, total_earnings
+        ORDER BY total_earnings DESC
+        LIMIT 10
+        """
+    )
+    top_by_earnings = [dict(rec) async for rec in top_earnings_result]
+
+    coverage_result = await session.run(
+        """
+        MATCH (pl:Platform)
+        OPTIONAL MATCH (p:PlatformProfile)-[:ON_PLATFORM]->(pl)
+        RETURN pl.name AS platform, count(p) AS profile_count
+        ORDER BY profile_count DESC
+        """
+    )
+    platform_coverage = [dict(rec) async for rec in coverage_result]
+
+    cross_result = await session.run(
+        """
+        MATCH (r:Researcher)
+        OPTIONAL MATCH (p:PlatformProfile)-[:BELONGS_TO]->(r)
+        WITH r, count(p) AS num_platforms
+        RETURN num_platforms, count(r) AS researcher_count
+        ORDER BY num_platforms
+        """
+    )
+    cross_platform = [dict(rec) async for rec in cross_result]
+
+    return {
+        "counts": counts,
+        "top_by_score": top_by_score,
+        "top_by_earnings": top_by_earnings,
+        "platform_coverage": platform_coverage,
+        "cross_platform_distribution": cross_platform,
+    }
