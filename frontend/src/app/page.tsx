@@ -40,9 +40,9 @@ function StatCard({
         </div>
         <div>
           <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="text-2xl font-bold">
+          <div className="text-2xl font-bold">
             {value !== undefined ? value.toLocaleString() : <Skeleton className="h-8 w-16" />}
-          </p>
+          </div>
         </div>
       </CardContent>
     </Card>
