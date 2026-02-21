@@ -10,6 +10,7 @@ from phoenix.core.logging import get_logger
 from phoenix.models.researcher import IdentityLink, PlatformProfile, SocialPlatform
 from phoenix.schema.queries import (
     create_researcher,
+    ensure_researchers_for_orphans,
     find_profiles_by_social,
     get_researcher_by_profile,
     link_profile_to_researcher,
@@ -160,4 +161,11 @@ async def resolve_batch(session: AsyncSession, profiles: list[PlatformProfile]) 
         result = await resolve_identity(session, profile)
         if result:
             resolved += 1
+
+    # Create standalone Researcher nodes for any profiles still without one
+    orphans_created = await ensure_researchers_for_orphans(session)
+    if orphans_created:
+        log.info("orphan_researchers_created", count=orphans_created)
+        resolved += orphans_created
+
     return resolved

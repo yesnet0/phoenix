@@ -167,6 +167,28 @@ async def create_researcher(session: AsyncSession, canonical_name: str) -> str:
     return researcher_id
 
 
+async def ensure_researchers_for_orphans(session: AsyncSession) -> int:
+    """Create a Researcher node for every profile that doesn't have one."""
+    result = await session.run(
+        """
+        MATCH (p:PlatformProfile)
+        WHERE NOT (p)-[:BELONGS_TO]->(:Researcher)
+        WITH p
+        CREATE (r:Researcher {
+            id: randomUUID(),
+            canonical_name: COALESCE(p.display_name, p.username),
+            composite_score: 0.0,
+            created_at: datetime().epochMillis,
+            updated_at: datetime().epochMillis
+        })
+        CREATE (p)-[:BELONGS_TO]->(r)
+        RETURN count(r) AS created
+        """
+    )
+    record = await result.single()
+    return record["created"] if record else 0
+
+
 async def find_profiles_by_social(session: AsyncSession, platform: str, handle: str) -> list[dict]:
     """Find PlatformProfile IDs that share a social link."""
     result = await session.run(
