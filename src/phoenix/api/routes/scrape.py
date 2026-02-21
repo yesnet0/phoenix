@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from phoenix.core.database import get_session
 from phoenix.core.logging import get_logger
 from phoenix.core.tasks import app as celery_app
+from phoenix.identity.github_enricher import enrich_from_github
 from phoenix.identity.resolver import resolve_batch
 from phoenix.models.scrape import ScrapeResult, ScrapeStatus
 from phoenix.schema.queries import create_snapshot, upsert_profile
@@ -101,6 +102,24 @@ async def scrape_health():
     }
 
 
+@router.post("/enrich")
+async def enrich():
+    """Run GitHub enrichment + re-resolve identities on existing profiles."""
+    async with get_session() as session:
+        github_added = await enrich_from_github(session)
+
+        # Re-run identity resolution on all profiles
+        result = await session.run(
+            "MATCH (p:PlatformProfile) RETURN p.id AS id, p.platform_name AS platform_name, p.username AS username"
+        )
+        profile_ids = [dict(rec) async for rec in result]
+
+    return {
+        "github_links_added": github_added,
+        "profiles_checked": len(profile_ids),
+    }
+
+
 @shared_task(name="phoenix.scrape", bind=True)
 def run_scrape(self, platform_name: str, max_profiles: int = 50) -> dict:
     """Celery task: scrape platform → store in Neo4j → resolve identities."""
@@ -136,6 +155,14 @@ async def _run_scrape_async(job_id: str, platform_name: str, max_profiles: int) 
                 except Exception as e:
                     profiles_failed += 1
                     errors.append(f"{profile.username}: {e}")
+
+            # Enrich profiles with GitHub data before identity resolution
+            try:
+                github_added = await enrich_from_github(session)
+                if github_added:
+                    log.info("github_enrichment_done", new_links=github_added)
+            except Exception as e:
+                log.warning("github_enrichment_failed", error=str(e))
 
             # Run identity resolution
             identities_resolved = await resolve_batch(session, stored_profiles)

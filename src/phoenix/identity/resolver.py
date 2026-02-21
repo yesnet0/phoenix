@@ -58,6 +58,10 @@ PLATFORM_ACCOUNTS: set[tuple[str, str]] = {
     ("twitter", "openzeppelin"),
     ("twitter", "cantaborpen"),
     ("twitter", "thegaborph"),
+    ("twitter", "concretexyz"),
+    ("twitter", "0xpolygon"),
+    ("twitter", "uabortuniswap"),
+    ("twitter", "aaborty"),
     # GitHub accounts belonging to platforms
     ("github", "immunefi"),
     ("github", "cyfrin"),
@@ -66,6 +70,8 @@ PLATFORM_ACCOUNTS: set[tuple[str, str]] = {
     ("github", "hats-finance"),
     ("github", "huntr-dev"),
     ("github", "patchstack"),
+    ("github", "immunefi-team"),
+    ("github", "toptal"),
     # Emails belonging to platforms
     ("email", "info@hacktify.eu"),
     ("email", "support@mail.safevuln.com"),
