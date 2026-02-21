@@ -57,10 +57,10 @@ export const getProfiles = (
 };
 
 // Graph
-export const getGraphData = () => fetchJSON<GraphData>("/graph/");
+export const getGraphData = () => fetchJSON<GraphData>("/graph");
 
 // Analytics
-export const getAnalytics = () => fetchJSON<Analytics>("/analytics/");
+export const getAnalytics = () => fetchJSON<Analytics>("/analytics");
 
 // Scrape
 export const getPlatforms = () =>
