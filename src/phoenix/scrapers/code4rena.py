@@ -148,8 +148,45 @@ class Code4renaScraper(PlaywrightScraper):
             if med_match:
                 raw_data["med_risk"] = int(med_match.group(1))
 
-            external_links = await self._get_all_links(page, exclude_domain="code4rena.com")
-            social_links = extract_social_links(body, external_links)
+            # Only extract social links from the user's profile header section,
+            # NOT from contest/project links elsewhere on the page.
+            # The profile section has links in the top area before contest results.
+            social_links = []
+            try:
+                # Look for social link elements in the profile header area
+                profile_link_els = await page.query_selector_all(
+                    'header a[href], [class*="profile"] a[href], [class*="social"] a[href], '
+                    '[class*="header"] a[href], [class*="bio"] a[href]'
+                )
+                profile_urls = []
+                for el in profile_link_els:
+                    href = await el.get_attribute("href")
+                    if href and href.startswith("http") and "code4rena.com" not in href:
+                        profile_urls.append(href)
+
+                # If no header links found, try a more targeted approach:
+                # only include links from the first section of the page (above contest results)
+                if not profile_urls:
+                    all_links = await page.eval_on_selector_all(
+                        "a[href]",
+                        """els => {
+                            const results = [];
+                            for (const el of els) {
+                                // Stop once we hit contest/audit sections
+                                const text = el.closest('section, article, [class*="contest"], [class*="audit"], [class*="finding"]');
+                                if (text) break;
+                                if (el.href && el.href.startsWith('http') && !el.href.includes('code4rena.com')) {
+                                    results.push(el.href);
+                                }
+                            }
+                            return results;
+                        }"""
+                    )
+                    profile_urls = all_links[:10]  # Cap to avoid page-wide link extraction
+
+                social_links = extract_social_links("", profile_urls)
+            except Exception:
+                pass  # If extraction fails, proceed without social links
 
             profile = PlatformProfile(
                 platform_name=self.platform_name,
