@@ -27,13 +27,15 @@ function StatCard({
   label,
   value,
   icon: Icon,
+  href,
 }: {
   label: string;
   value: number | undefined;
   icon: React.ElementType;
+  href?: string;
 }) {
-  return (
-    <Card>
+  const content = (
+    <Card className={href ? "hover:border-primary/50 transition-colors cursor-pointer" : ""}>
       <CardContent className="flex items-center gap-4 p-6">
         <div className="rounded-lg bg-primary/10 p-3">
           <Icon className="h-5 w-5 text-primary" />
@@ -47,6 +49,8 @@ function StatCard({
       </CardContent>
     </Card>
   );
+  if (href) return <Link href={href}>{content}</Link>;
+  return content;
 }
 
 export default function DashboardPage() {
@@ -60,8 +64,8 @@ export default function DashboardPage() {
       <h1 className="text-2xl font-bold">Dashboard</h1>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Researchers" value={data?.counts.researchers} icon={Users} />
-        <StatCard label="Profiles" value={data?.counts.profiles} icon={Globe} />
+        <StatCard label="Researchers" value={data?.counts.researchers} icon={Users} href="/researchers" />
+        <StatCard label="Profiles" value={data?.counts.profiles} icon={Globe} href="/profiles" />
         <StatCard label="Snapshots" value={data?.counts.snapshots} icon={Camera} />
         <StatCard label="Social Links" value={data?.counts.social_links} icon={Link2} />
       </div>

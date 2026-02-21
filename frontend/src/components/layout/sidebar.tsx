@@ -7,6 +7,7 @@ import {
   BarChart3,
   GitGraph,
   Search,
+  Users,
   Zap,
   Activity,
   Menu,
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
   { href: "/graph", label: "Graph", icon: GitGraph },
   { href: "/researchers", label: "Researchers", icon: Search },
+  { href: "/profiles", label: "Profiles", icon: Users },
   { href: "/scrape", label: "Scrape", icon: Zap },
 ];
 

@@ -16,9 +16,18 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
-import { ExternalLink, ArrowLeft } from "lucide-react";
+import {
+  ExternalLink,
+  ArrowLeft,
+  MapPin,
+  Calendar,
+  Shield,
+  Tag,
+  Link2,
+  GitBranch,
+} from "lucide-react";
 import Link from "next/link";
-import type { ProfileDetail } from "@/types/phoenix";
+import type { ProfileDetail, IdentityLinkDetail } from "@/types/phoenix";
 
 const METRIC_OPTIONS = [
   { key: "overall_score", label: "Score" },
@@ -58,7 +67,32 @@ function ProfileCard({ profile }: { profile: ProfileDetail }) {
           </div>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
+        {/* Bio */}
+        {profile.bio && (
+          <p className="text-sm text-muted-foreground line-clamp-3">{profile.bio}</p>
+        )}
+
+        {/* Location & dates */}
+        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+          {profile.location && (
+            <span className="flex items-center gap-1">
+              <MapPin className="h-3 w-3" /> {profile.location}
+            </span>
+          )}
+          {profile.join_date && (
+            <span className="flex items-center gap-1">
+              <Calendar className="h-3 w-3" /> Joined {profile.join_date.split("T")[0]}
+            </span>
+          )}
+          {profile.last_scraped && (
+            <span className="flex items-center gap-1">
+              Scraped {profile.last_scraped.split("T")[0]}
+            </span>
+          )}
+        </div>
+
+        {/* Core stats */}
         {latestSnapshot ? (
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
             {latestSnapshot.global_rank != null && (
@@ -89,55 +123,145 @@ function ProfileCard({ profile }: { profile: ProfileDetail }) {
                 <p className="font-mono font-medium">{latestSnapshot.finding_count}</p>
               </div>
             )}
+            {latestSnapshot.signal_percentile != null && (
+              <div>
+                <p className="text-muted-foreground">Signal</p>
+                <p className="font-mono font-medium">{latestSnapshot.signal_percentile.toFixed(0)}%</p>
+              </div>
+            )}
+            {latestSnapshot.impact_percentile != null && (
+              <div>
+                <p className="text-muted-foreground">Impact</p>
+                <p className="font-mono font-medium">{latestSnapshot.impact_percentile.toFixed(0)}%</p>
+              </div>
+            )}
+            {latestSnapshot.acceptance_rate != null && (
+              <div>
+                <p className="text-muted-foreground">Acceptance</p>
+                <p className="font-mono font-medium">{latestSnapshot.acceptance_rate.toFixed(0)}%</p>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">No snapshots yet</p>
         )}
+
+        {/* Severity badges */}
         {latestSnapshot &&
           (latestSnapshot.critical_count ||
             latestSnapshot.high_count ||
             latestSnapshot.medium_count ||
             latestSnapshot.low_count) && (
-            <div className="mt-3 flex gap-2">
+            <div className="flex gap-2">
               {latestSnapshot.critical_count != null &&
                 latestSnapshot.critical_count > 0 && (
                   <Badge className="bg-red-500/20 text-red-400">
-                    C: {latestSnapshot.critical_count}
+                    Critical: {latestSnapshot.critical_count}
                   </Badge>
                 )}
               {latestSnapshot.high_count != null &&
                 latestSnapshot.high_count > 0 && (
                   <Badge className="bg-orange-500/20 text-orange-400">
-                    H: {latestSnapshot.high_count}
+                    High: {latestSnapshot.high_count}
                   </Badge>
                 )}
               {latestSnapshot.medium_count != null &&
                 latestSnapshot.medium_count > 0 && (
                   <Badge className="bg-yellow-500/20 text-yellow-400">
-                    M: {latestSnapshot.medium_count}
+                    Medium: {latestSnapshot.medium_count}
                   </Badge>
                 )}
               {latestSnapshot.low_count != null &&
                 latestSnapshot.low_count > 0 && (
                   <Badge className="bg-blue-500/20 text-blue-400">
-                    L: {latestSnapshot.low_count}
+                    Low: {latestSnapshot.low_count}
                   </Badge>
                 )}
             </div>
           )}
+
+        {/* Badges */}
+        {profile.badges && profile.badges.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {profile.badges.map((badge) => (
+              <Badge key={badge} variant="outline" className="text-xs">
+                <Shield className="mr-1 h-3 w-3" /> {badge}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {/* Skill tags */}
+        {profile.skill_tags && profile.skill_tags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {profile.skill_tags.map((tag) => (
+              <Badge key={tag} className="bg-primary/10 text-primary text-xs">
+                <Tag className="mr-1 h-3 w-3" /> {tag}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {/* Social links */}
         {profile.social_links.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-1">
             {profile.social_links.map((sl) => (
               <Badge
                 key={`${sl.platform}-${sl.handle}`}
                 variant="outline"
                 className="text-xs"
               >
+                <Link2 className="mr-1 h-3 w-3" />
                 {sl.platform}: {sl.handle}
               </Badge>
             ))}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function IdentityChain({ links }: { links: IdentityLinkDetail[] }) {
+  if (!links || links.length === 0) return null;
+
+  // Group by key_type + key_value
+  const grouped = new Map<string, IdentityLinkDetail[]>();
+  for (const link of links) {
+    const key = `${link.key_type}:${link.key_value}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(link);
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <GitBranch className="h-4 w-4" /> Identity Resolution
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3">
+          {[...grouped.entries()].map(([key, profileLinks]) => (
+            <div key={key} className="rounded-md border p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <Badge variant="secondary" className="text-xs font-mono">
+                  {key}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  matched {profileLinks.length} profile{profileLinks.length !== 1 ? "s" : ""}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {profileLinks.map((pl) => (
+                  <Badge key={pl.link_id + pl.profile_id} variant="outline" className="text-xs">
+                    {pl.platform_name}: @{pl.username}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );
@@ -248,6 +372,16 @@ export default function ResearcherDetailPage({
     return <p className="text-muted-foreground">Researcher not found.</p>;
   }
 
+  // Aggregate stats across profiles
+  const totalEarnings = data.profiles.reduce((sum, p) => {
+    const snap = p.snapshots.sort((a, b) => b.captured_at.localeCompare(a.captured_at))[0];
+    return sum + (snap?.total_earnings || 0);
+  }, 0);
+  const totalFindings = data.profiles.reduce((sum, p) => {
+    const snap = p.snapshots.sort((a, b) => b.captured_at.localeCompare(a.captured_at))[0];
+    return sum + (snap?.finding_count || 0);
+  }, 0);
+
   return (
     <div className="space-y-6">
       <div>
@@ -258,18 +392,31 @@ export default function ResearcherDetailPage({
           <ArrowLeft className="h-3 w-3" /> Back to researchers
         </Link>
         <h1 className="text-2xl font-bold">{data.canonical_name}</h1>
-        <p className="text-muted-foreground">
-          Composite Score: {data.composite_score.toFixed(1)} &middot;{" "}
-          {data.profiles.length} platform{data.profiles.length !== 1 ? "s" : ""}
-        </p>
+        <div className="mt-1 flex flex-wrap gap-4 text-sm text-muted-foreground">
+          <span>{data.profiles.length} platform{data.profiles.length !== 1 ? "s" : ""}</span>
+          {totalEarnings > 0 && (
+            <span className="font-mono">${totalEarnings.toLocaleString()} total earnings</span>
+          )}
+          {totalFindings > 0 && (
+            <span>{totalFindings} total findings</span>
+          )}
+          <span>Tracked since {data.created_at?.split?.("T")?.[0] || "unknown"}</span>
+        </div>
       </div>
 
       <Separator />
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {data.profiles.map((profile) => (
-          <ProfileCard key={profile.id} profile={profile} />
-        ))}
+      {/* Identity resolution chain */}
+      <IdentityChain links={data.identity_links} />
+
+      {/* Profile cards */}
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Platform Profiles</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          {data.profiles.map((profile) => (
+            <ProfileCard key={profile.id} profile={profile} />
+          ))}
+        </div>
       </div>
 
       <SnapshotChart profiles={data.profiles} />

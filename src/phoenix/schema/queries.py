@@ -261,6 +261,9 @@ async def get_researcher_detail(session: AsyncSession, researcher_id: str) -> di
                collect({
                    id: p.id, platform_name: p.platform_name, username: p.username,
                    display_name: p.display_name, bio: p.bio, profile_url: p.profile_url,
+                   location: p.location, badges: p.badges, skill_tags: p.skill_tags,
+                   join_date: p.join_date, last_active: p.last_active,
+                   last_scraped: p.last_scraped,
                    snapshots: snapshots, social_links: social_links
                }) AS profiles
         """,
@@ -438,3 +441,119 @@ async def get_analytics(session: AsyncSession) -> dict:
         "platform_coverage": platform_coverage,
         "cross_platform_distribution": cross_platform,
     }
+
+
+async def list_profiles(
+    session: AsyncSession,
+    skip: int = 0,
+    limit: int = 50,
+    platform: str | None = None,
+    sort_by: str = "earnings",
+) -> list[dict]:
+    """List profiles with latest snapshot data, optionally filtered by platform."""
+    platform_filter = "AND p.platform_name = $platform" if platform else ""
+
+    sort_map = {
+        "earnings": "COALESCE(s.total_earnings, 0) DESC",
+        "rank": "COALESCE(s.global_rank, 999999) ASC",
+        "findings": "COALESCE(s.finding_count, 0) DESC",
+        "score": "COALESCE(s.overall_score, 0) DESC",
+        "username": "p.username ASC",
+    }
+    order = sort_map.get(sort_by, sort_map["earnings"])
+
+    result = await session.run(
+        f"""
+        MATCH (p:PlatformProfile)
+        WHERE true {platform_filter}
+        OPTIONAL MATCH (p)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
+        WITH p, s ORDER BY s.captured_at DESC
+        WITH p, head(collect(s)) AS s
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(r:Researcher)
+        RETURN p.id AS profile_id, p.platform_name AS platform_name,
+               p.username AS username, p.display_name AS display_name,
+               p.profile_url AS profile_url, p.bio AS bio,
+               p.location AS location, p.badges AS badges,
+               s.overall_score AS score, s.global_rank AS rank,
+               s.total_earnings AS earnings, s.finding_count AS findings,
+               s.critical_count AS critical, s.high_count AS high,
+               s.medium_count AS medium, s.low_count AS low,
+               r.id AS researcher_id, r.canonical_name AS researcher_name
+        ORDER BY {order}
+        SKIP $skip LIMIT $limit
+        """,
+        skip=skip,
+        limit=limit,
+        platform=platform,
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_identity_links(session: AsyncSession, researcher_id: str) -> list[dict]:
+    """Get identity resolution links for a researcher."""
+    result = await session.run(
+        """
+        MATCH (r:Researcher {id: $researcher_id})
+        MATCH (il:IdentityLink)-[:LINKS]->(r)
+        MATCH (il)-[:LINKS]->(p:PlatformProfile)
+        RETURN il.id AS link_id, il.key_type AS key_type, il.key_value AS key_value,
+               il.confidence AS confidence, il.resolved_at AS resolved_at,
+               p.id AS profile_id, p.platform_name AS platform_name, p.username AS username
+        ORDER BY il.resolved_at
+        """,
+        researcher_id=researcher_id,
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_available_platforms(session: AsyncSession) -> list[str]:
+    """Get list of platforms that have profiles."""
+    result = await session.run(
+        """
+        MATCH (p:PlatformProfile)
+        RETURN DISTINCT p.platform_name AS platform
+        ORDER BY platform
+        """
+    )
+    return [record["platform"] async for record in result]
+
+
+async def list_researchers_enriched(
+    session: AsyncSession,
+    skip: int = 0,
+    limit: int = 50,
+    sort_by: str = "score",
+) -> list[dict]:
+    """List researchers with aggregated stats from their profiles."""
+    sort_map = {
+        "score": "r.composite_score DESC",
+        "name": "r.canonical_name ASC",
+        "platforms": "platform_count DESC",
+        "earnings": "total_earnings DESC",
+        "findings": "total_findings DESC",
+    }
+    order = sort_map.get(sort_by, sort_map["score"])
+
+    result = await session.run(
+        f"""
+        MATCH (r:Researcher)
+        OPTIONAL MATCH (p:PlatformProfile)-[:BELONGS_TO]->(r)
+        OPTIONAL MATCH (p)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
+        WITH r, p, s ORDER BY s.captured_at DESC
+        WITH r, p, head(collect(s)) AS latest_snap
+        WITH r,
+             collect(DISTINCT {{platform: p.platform_name, username: p.username}}) AS profiles,
+             count(DISTINCT p.platform_name) AS platform_count,
+             sum(COALESCE(latest_snap.total_earnings, 0)) AS total_earnings,
+             sum(COALESCE(latest_snap.finding_count, 0)) AS total_findings,
+             max(latest_snap.overall_score) AS top_score
+        RETURN r.id AS id, r.canonical_name AS canonical_name,
+               r.composite_score AS composite_score,
+               profiles, platform_count, total_earnings, total_findings, top_score
+        ORDER BY {order}
+        SKIP $skip LIMIT $limit
+        """,
+        skip=skip,
+        limit=limit,
+    )
+    return [dict(record) async for record in result]

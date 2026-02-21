@@ -5,6 +5,10 @@ export interface ResearcherSummary {
   canonical_name: string;
   composite_score: number;
   profiles: { platform: string; username: string }[];
+  platform_count: number;
+  total_earnings: number;
+  total_findings: number;
+  top_score: number | null;
 }
 
 export interface SocialLink {
@@ -37,8 +41,25 @@ export interface ProfileDetail {
   display_name: string;
   bio: string;
   profile_url: string;
+  location: string;
+  badges: string[];
+  skill_tags: string[];
+  join_date: string | null;
+  last_active: string | null;
+  last_scraped: string | null;
   snapshots: ProfileSnapshot[];
   social_links: SocialLink[];
+}
+
+export interface IdentityLinkDetail {
+  link_id: string;
+  key_type: string;
+  key_value: string;
+  confidence: number;
+  resolved_at: string;
+  profile_id: string;
+  platform_name: string;
+  username: string;
 }
 
 export interface ResearcherDetail {
@@ -47,6 +68,28 @@ export interface ResearcherDetail {
   composite_score: number;
   created_at: string;
   profiles: ProfileDetail[];
+  identity_links: IdentityLinkDetail[];
+}
+
+export interface ProfileListItem {
+  profile_id: string;
+  platform_name: string;
+  username: string;
+  display_name: string;
+  profile_url: string;
+  bio: string;
+  location: string;
+  badges: string[];
+  score: number | null;
+  rank: number | null;
+  earnings: number | null;
+  findings: number | null;
+  critical: number | null;
+  high: number | null;
+  medium: number | null;
+  low: number | null;
+  researcher_id: string | null;
+  researcher_name: string | null;
 }
 
 export interface SearchResult {

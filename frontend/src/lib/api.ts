@@ -3,6 +3,7 @@ import type {
   GraphData,
   HealthStatus,
   JobStatus,
+  ProfileListItem,
   ResearcherDetail,
   ResearcherSummary,
   ScrapeHealth,
@@ -24,9 +25,9 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
 export const getHealth = () => fetchJSON<HealthStatus>("/health");
 
 // Researchers
-export const getResearchers = (skip = 0, limit = 50) =>
+export const getResearchers = (skip = 0, limit = 50, sort = "score") =>
   fetchJSON<{ researchers: ResearcherSummary[]; count: number }>(
-    `/researchers/?skip=${skip}&limit=${limit}`
+    `/researchers/?skip=${skip}&limit=${limit}&sort=${sort}`
   );
 
 export const getResearcher = (id: string) =>
@@ -36,6 +37,24 @@ export const searchProfiles = (username: string) =>
   fetchJSON<{ results: SearchResult[]; count: number }>(
     `/researchers/search/${encodeURIComponent(username)}`
   );
+
+// Profiles
+export const getProfiles = (
+  skip = 0,
+  limit = 50,
+  platform?: string,
+  sort = "earnings"
+) => {
+  const params = new URLSearchParams({
+    skip: String(skip),
+    limit: String(limit),
+    sort,
+  });
+  if (platform) params.set("platform", platform);
+  return fetchJSON<{ profiles: ProfileListItem[]; count: number; platforms: string[] }>(
+    `/researchers/profiles?${params}`
+  );
+};
 
 // Graph
 export const getGraphData = () => fetchJSON<GraphData>("/graph/");

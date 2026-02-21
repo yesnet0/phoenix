@@ -8,19 +8,35 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Search } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Search, DollarSign, Bug, Trophy } from "lucide-react";
 import Link from "next/link";
 import { useDebounce } from "@/lib/hooks";
+
+const SORT_OPTIONS = [
+  { value: "score", label: "Score" },
+  { value: "earnings", label: "Earnings" },
+  { value: "findings", label: "Findings" },
+  { value: "platforms", label: "Platforms" },
+  { value: "name", label: "Name" },
+];
 
 export default function ResearchersPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(0);
+  const [sort, setSort] = useState("score");
   const limit = 24;
   const debouncedSearch = useDebounce(searchTerm, 300);
 
   const researchersQuery = useQuery({
-    queryKey: ["researchers", page],
-    queryFn: () => getResearchers(page * limit, limit),
+    queryKey: ["researchers", page, sort],
+    queryFn: () => getResearchers(page * limit, limit, sort),
     enabled: !debouncedSearch,
   });
 
@@ -35,7 +51,19 @@ export default function ResearchersPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Researchers</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Researchers</h1>
+        <Select value={sort} onValueChange={(v) => { setSort(v); setPage(0); }}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SORT_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>Sort: {o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -53,7 +81,7 @@ export default function ResearchersPage() {
       {loading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-32" />
+            <Skeleton key={i} className="h-40" />
           ))}
         </div>
       ) : isSearching ? (
@@ -97,11 +125,28 @@ export default function ResearchersPage() {
                       <div className="flex items-start justify-between">
                         <div>
                           <p className="font-medium">{r.canonical_name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            Score: {r.composite_score.toFixed(1)}
-                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            {r.total_earnings > 0 && (
+                              <span className="flex items-center gap-1 font-mono">
+                                <DollarSign className="h-3 w-3" />
+                                {r.total_earnings.toLocaleString()}
+                              </span>
+                            )}
+                            {r.total_findings > 0 && (
+                              <span className="flex items-center gap-1">
+                                <Bug className="h-3 w-3" />
+                                {r.total_findings} findings
+                              </span>
+                            )}
+                            {r.top_score != null && r.top_score > 0 && (
+                              <span className="flex items-center gap-1">
+                                <Trophy className="h-3 w-3" />
+                                {r.top_score.toFixed(1)}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <Badge variant="outline">{r.profiles.length} profiles</Badge>
+                        <Badge variant="outline">{r.platform_count} platform{r.platform_count !== 1 ? "s" : ""}</Badge>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1">
                         {[...new Map(r.profiles.map((p) => [p.platform, p])).values()].map((p) => (
@@ -110,7 +155,7 @@ export default function ResearchersPage() {
                             variant="secondary"
                             className="text-xs"
                           >
-                            {p.platform}
+                            {p.platform}: {p.username}
                           </Badge>
                         ))}
                       </div>
