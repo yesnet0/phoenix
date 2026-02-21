@@ -165,18 +165,20 @@ export default function DashboardPage() {
             {isLoading ? (
               <Skeleton className="h-64 w-full" />
             ) : data?.platform_coverage.filter((p) => p.profile_count > 0).length ? (
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart
-                  data={data.platform_coverage.filter((p) => p.profile_count > 0)}
-                  layout="vertical"
-                  margin={{ left: 80 }}
-                >
-                  <XAxis type="number" />
-                  <YAxis type="category" dataKey="platform" width={75} tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Bar dataKey="profile_count" fill="hsl(var(--chart-1))" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="max-h-[400px] overflow-y-auto">
+                <ResponsiveContainer width="100%" height={Math.max(280, data.platform_coverage.filter((p) => p.profile_count > 0).length * 28)}>
+                  <BarChart
+                    data={data.platform_coverage.filter((p) => p.profile_count > 0)}
+                    layout="vertical"
+                    margin={{ left: 80 }}
+                  >
+                    <XAxis type="number" />
+                    <YAxis type="category" dataKey="platform" width={75} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Bar dataKey="profile_count" fill="hsl(var(--chart-1))" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">No profiles scraped yet</p>
             )}

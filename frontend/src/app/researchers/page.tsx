@@ -104,9 +104,9 @@ export default function ResearchersPage() {
                         <Badge variant="outline">{r.profiles.length} profiles</Badge>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1">
-                        {r.profiles.map((p) => (
+                        {[...new Map(r.profiles.map((p) => [p.platform, p])).values()].map((p) => (
                           <Badge
-                            key={`${p.platform}-${p.username}`}
+                            key={p.platform}
                             variant="secondary"
                             className="text-xs"
                           >
