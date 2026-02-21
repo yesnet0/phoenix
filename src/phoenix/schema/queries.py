@@ -189,6 +189,21 @@ async def ensure_researchers_for_orphans(session: AsyncSession) -> int:
     return record["created"] if record else 0
 
 
+async def find_profiles_by_username(session: AsyncSession, username: str, exclude_platform: str) -> list[dict]:
+    """Find profiles on OTHER platforms with the same username (case-insensitive)."""
+    result = await session.run(
+        """
+        MATCH (p:PlatformProfile)
+        WHERE toLower(p.username) = toLower($username)
+          AND p.platform_name <> $exclude_platform
+        RETURN p.id AS profile_id, p.platform_name AS platform_name, p.username AS username
+        """,
+        username=username,
+        exclude_platform=exclude_platform,
+    )
+    return [dict(record) async for record in result]
+
+
 async def find_profiles_by_social(session: AsyncSession, platform: str, handle: str) -> list[dict]:
     """Find PlatformProfile IDs that share a social link."""
     result = await session.run(
