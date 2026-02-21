@@ -25,6 +25,9 @@ import {
   Tag,
   Link2,
   GitBranch,
+  TrendingUp,
+  Bug,
+  Trophy,
 } from "lucide-react";
 import Link from "next/link";
 import type { ProfileDetail, IdentityLinkDetail } from "@/types/phoenix";
@@ -391,14 +394,26 @@ export default function ResearcherDetailPage({
         >
           <ArrowLeft className="h-3 w-3" /> Back to researchers
         </Link>
-        <h1 className="text-2xl font-bold">{data.canonical_name}</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">{data.canonical_name}</h1>
+          {data.composite_score > 0 && (
+            <Badge className="text-sm font-mono">
+              <TrendingUp className="mr-1 h-3 w-3" />
+              {data.composite_score >= 1000
+                ? `${(data.composite_score / 1000).toFixed(1)}K`
+                : data.composite_score.toFixed(0)}
+            </Badge>
+          )}
+        </div>
         <div className="mt-1 flex flex-wrap gap-4 text-sm text-muted-foreground">
           <span>{data.profiles.length} platform{data.profiles.length !== 1 ? "s" : ""}</span>
           {totalEarnings > 0 && (
             <span className="font-mono">${totalEarnings.toLocaleString()} total earnings</span>
           )}
           {totalFindings > 0 && (
-            <span>{totalFindings} total findings</span>
+            <span className="flex items-center gap-1">
+              <Bug className="h-3 w-3" /> {totalFindings.toLocaleString()} findings
+            </span>
           )}
           <span>Tracked since {data.created_at?.split?.("T")?.[0] || "unknown"}</span>
         </div>

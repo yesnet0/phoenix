@@ -392,22 +392,30 @@ async def get_analytics(session: AsyncSession) -> dict:
     top_score_result = await session.run(
         """
         MATCH (r:Researcher)
+        WHERE r.composite_score > 0
         OPTIONAL MATCH (p:PlatformProfile)-[:BELONGS_TO]->(r)
         RETURN r.id AS id, r.canonical_name AS name, r.composite_score AS score,
-               count(p) AS platform_count
+               count(DISTINCT p) AS platform_count
         ORDER BY r.composite_score DESC
         LIMIT 10
         """
     )
     top_by_score = [dict(rec) async for rec in top_score_result]
 
+    # Use latest snapshot per profile, sum scores across profiles
     top_earnings_result = await session.run(
         """
         MATCH (r:Researcher)<-[:BELONGS_TO]-(p:PlatformProfile)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
-        WHERE s.total_earnings IS NOT NULL
-        WITH r, sum(s.total_earnings) AS total_earnings
-        RETURN r.id AS id, r.canonical_name AS name, total_earnings
-        ORDER BY total_earnings DESC
+        WITH r, p, s ORDER BY s.captured_at DESC
+        WITH r, p, head(collect(s)) AS latest
+        WITH r,
+             sum(COALESCE(latest.total_earnings, 0)) AS total_earnings,
+             sum(COALESCE(latest.finding_count, 0)) AS total_findings,
+             max(latest.overall_score) AS top_score
+        WHERE total_earnings > 0 OR total_findings > 0
+        RETURN r.id AS id, r.canonical_name AS name,
+               total_earnings, total_findings, top_score
+        ORDER BY CASE WHEN total_earnings > 0 THEN total_earnings ELSE total_findings END DESC
         LIMIT 10
         """
     )
@@ -441,6 +449,49 @@ async def get_analytics(session: AsyncSession) -> dict:
         "platform_coverage": platform_coverage,
         "cross_platform_distribution": cross_platform,
     }
+
+
+async def recompute_composite_scores(session: AsyncSession) -> int:
+    """Recompute composite_score for all researchers based on their profiles' latest snapshots.
+
+    Score formula: sum of normalized scores across platforms.
+    Each profile contributes: overall_score (if available) or finding_count * 10.
+    Multi-platform researchers get a 20% bonus per additional platform.
+    """
+    result = await session.run(
+        """
+        MATCH (r:Researcher)
+        OPTIONAL MATCH (p:PlatformProfile)-[:BELONGS_TO]->(r)
+        OPTIONAL MATCH (p)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
+        WITH r, p, s ORDER BY s.captured_at DESC
+        WITH r, p, head(collect(s)) AS latest
+        WITH r,
+             count(DISTINCT p) AS platform_count,
+             sum(COALESCE(latest.overall_score, 0)) AS total_score,
+             sum(COALESCE(latest.finding_count, 0)) AS total_findings,
+             max(latest.global_rank) AS best_rank
+        WITH r, platform_count, total_score, total_findings, best_rank,
+             CASE
+                 WHEN total_score > 0 THEN total_score
+                 WHEN total_findings > 0 THEN total_findings * 10.0
+                 ELSE 0
+             END AS base_score
+        WITH r, platform_count,
+             base_score * (1.0 + (platform_count - 1) * 0.2) AS composite
+        SET r.composite_score = round(composite, 2),
+            r.updated_at = datetime().epochMillis
+        RETURN count(r) AS updated
+        """
+    )
+    record = await result.single()
+    return record["updated"] if record else 0
+
+
+async def get_researcher_count(session: AsyncSession) -> int:
+    """Get total researcher count."""
+    result = await session.run("MATCH (r:Researcher) RETURN count(r) AS total")
+    record = await result.single()
+    return record["total"] if record else 0
 
 
 async def list_profiles(

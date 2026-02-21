@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from phoenix.core.database import get_session
 from phoenix.schema.queries import (
     get_identity_links,
+    get_researcher_count,
     get_researcher_detail,
     list_profiles,
     list_researchers,
@@ -20,7 +21,8 @@ router = APIRouter()
 async def list_all(skip: int = 0, limit: int = 50, sort: str = "score"):
     async with get_session() as session:
         researchers = await list_researchers_enriched(session, skip=skip, limit=limit, sort_by=sort)
-    return {"researchers": researchers, "count": len(researchers)}
+        total = await get_researcher_count(session)
+    return {"researchers": researchers, "total": total, "count": len(researchers)}
 
 
 @router.get("/search/{username}")

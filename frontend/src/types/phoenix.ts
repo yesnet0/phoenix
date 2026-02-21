@@ -142,6 +142,8 @@ export interface TopEarner {
   id: string;
   name: string;
   total_earnings: number;
+  total_findings: number;
+  top_score: number | null;
 }
 
 export interface PlatformCoverage {

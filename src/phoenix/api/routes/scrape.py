@@ -14,7 +14,7 @@ from phoenix.core.tasks import app as celery_app
 from phoenix.identity.github_enricher import enrich_from_github
 from phoenix.identity.resolver import resolve_batch
 from phoenix.models.scrape import ScrapeResult, ScrapeStatus
-from phoenix.schema.queries import create_snapshot, upsert_profile
+from phoenix.schema.queries import create_snapshot, recompute_composite_scores, upsert_profile
 from phoenix.scrapers.registry import discover_scrapers, get_scraper, list_scrapers
 
 # Auto-discover all scrapers when this module is imported (including by Celery workers)
@@ -166,6 +166,12 @@ async def _run_scrape_async(job_id: str, platform_name: str, max_profiles: int) 
 
             # Run identity resolution
             identities_resolved = await resolve_batch(session, stored_profiles)
+
+            # Recompute composite scores
+            try:
+                await recompute_composite_scores(session)
+            except Exception as e:
+                log.warning("score_recompute_failed", error=str(e))
 
     except Exception as e:
         errors.append(str(e))

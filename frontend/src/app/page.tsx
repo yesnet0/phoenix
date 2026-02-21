@@ -21,7 +21,14 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { Users, Globe, Camera, Link2 } from "lucide-react";
+import { Users, Globe, Camera, Link2, Activity } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+
+function formatScore(score: number): string {
+  if (score >= 1_000_000) return `${(score / 1_000_000).toFixed(1)}M`;
+  if (score >= 1_000) return `${(score / 1_000).toFixed(1)}K`;
+  return score.toFixed(0);
+}
 
 function StatCard({
   label,
@@ -57,15 +64,28 @@ export default function DashboardPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["analytics"],
     queryFn: getAnalytics,
+    refetchInterval: 30000,
   });
+
+  const multiPlatformCount = data?.cross_platform_distribution
+    .filter((c) => c.num_platforms > 1)
+    .reduce((sum, c) => sum + c.researcher_count, 0) ?? 0;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        {data && (
+          <Badge variant="outline" className="text-xs">
+            {multiPlatformCount} multi-platform identities resolved
+          </Badge>
+        )}
+      </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Researchers" value={data?.counts.researchers} icon={Users} href="/researchers" />
         <StatCard label="Profiles" value={data?.counts.profiles} icon={Globe} href="/profiles" />
+        <StatCard label="Platforms" value={data?.counts.platforms} icon={Activity} href="/scrape" />
         <StatCard label="Snapshots" value={data?.counts.snapshots} icon={Camera} />
         <StatCard label="Social Links" value={data?.counts.social_links} icon={Link2} />
       </div>
@@ -73,7 +93,7 @@ export default function DashboardPage() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Top Researchers (Score)</CardTitle>
+            <CardTitle>Top Researchers</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -86,27 +106,35 @@ export default function DashboardPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8">#</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead className="text-right">Score</TableHead>
                     <TableHead className="text-right">Platforms</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.top_by_score.map((r) => (
+                  {data.top_by_score.map((r, i) => (
                     <TableRow key={r.id}>
+                      <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                       <TableCell>
                         <Link
                           href={`/researchers/${r.id}`}
-                          className="text-primary hover:underline"
+                          className="text-primary hover:underline font-medium"
                         >
                           {r.name}
                         </Link>
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {r.score.toFixed(1)}
+                        {formatScore(r.score)}
                       </TableCell>
                       <TableCell className="text-right">
-                        {r.platform_count}
+                        {r.platform_count > 1 ? (
+                          <Badge variant="secondary" className="text-xs">
+                            {r.platform_count}
+                          </Badge>
+                        ) : (
+                          r.platform_count
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -120,7 +148,7 @@ export default function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Top Earners</CardTitle>
+            <CardTitle>Most Active (Findings)</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -133,30 +161,36 @@ export default function DashboardPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8">#</TableHead>
                     <TableHead>Name</TableHead>
-                    <TableHead className="text-right">Earnings</TableHead>
+                    <TableHead className="text-right">Findings</TableHead>
+                    <TableHead className="text-right">Top Score</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.top_by_earnings.map((r) => (
+                  {data.top_by_earnings.map((r, i) => (
                     <TableRow key={r.id}>
+                      <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                       <TableCell>
                         <Link
                           href={`/researchers/${r.id}`}
-                          className="text-primary hover:underline"
+                          className="text-primary hover:underline font-medium"
                         >
                           {r.name}
                         </Link>
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        ${r.total_earnings.toLocaleString()}
+                        {r.total_findings.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">
+                        {r.top_score ? formatScore(r.top_score) : "-"}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             ) : (
-              <p className="text-sm text-muted-foreground">No earnings data yet</p>
+              <p className="text-sm text-muted-foreground">No findings data yet</p>
             )}
           </CardContent>
         </Card>
@@ -199,8 +233,8 @@ export default function DashboardPage() {
             ) : data?.cross_platform_distribution.length ? (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={data.cross_platform_distribution}>
-                  <XAxis dataKey="num_platforms" />
-                  <YAxis />
+                  <XAxis dataKey="num_platforms" label={{ value: "Platforms", position: "insideBottom", offset: -5 }} />
+                  <YAxis label={{ value: "Researchers", angle: -90, position: "insideLeft" }} />
                   <Tooltip />
                   <Bar
                     dataKey="researcher_count"

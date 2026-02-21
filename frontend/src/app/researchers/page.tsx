@@ -15,13 +15,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, DollarSign, Bug, Trophy } from "lucide-react";
+import { Search, Bug, Trophy, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useDebounce } from "@/lib/hooks";
 
+function formatScore(score: number): string {
+  if (score >= 1_000_000) return `${(score / 1_000_000).toFixed(1)}M`;
+  if (score >= 1_000) return `${(score / 1_000).toFixed(1)}K`;
+  return score.toFixed(0);
+}
+
 const SORT_OPTIONS = [
   { value: "score", label: "Score" },
-  { value: "earnings", label: "Earnings" },
   { value: "findings", label: "Findings" },
   { value: "platforms", label: "Platforms" },
   { value: "name", label: "Name" },
@@ -48,11 +53,17 @@ export default function ResearchersPage() {
 
   const isSearching = !!debouncedSearch;
   const loading = isSearching ? searchQuery.isLoading : researchersQuery.isLoading;
+  const total = researchersQuery.data?.total ?? 0;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Researchers</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">Researchers</h1>
+          {!isSearching && total > 0 && (
+            <Badge variant="outline" className="text-xs">{total.toLocaleString()} total</Badge>
+          )}
+        </div>
         <Select value={sort} onValueChange={(v) => { setSort(v); setPage(0); }}>
           <SelectTrigger className="w-[140px]">
             <SelectValue />
@@ -125,28 +136,30 @@ export default function ResearchersPage() {
                       <div className="flex items-start justify-between">
                         <div>
                           <p className="font-medium">{r.canonical_name}</p>
-                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                            {r.total_earnings > 0 && (
-                              <span className="flex items-center gap-1 font-mono">
-                                <DollarSign className="h-3 w-3" />
-                                {r.total_earnings.toLocaleString()}
-                              </span>
-                            )}
-                            {r.total_findings > 0 && (
-                              <span className="flex items-center gap-1">
-                                <Bug className="h-3 w-3" />
-                                {r.total_findings} findings
-                              </span>
-                            )}
-                            {r.top_score != null && r.top_score > 0 && (
-                              <span className="flex items-center gap-1">
-                                <Trophy className="h-3 w-3" />
-                                {r.top_score.toFixed(1)}
-                              </span>
-                            )}
-                          </div>
+                          {r.composite_score > 0 && (
+                            <p className="text-sm font-mono text-primary flex items-center gap-1 mt-0.5">
+                              <TrendingUp className="h-3 w-3" />
+                              {formatScore(r.composite_score)}
+                            </p>
+                          )}
                         </div>
-                        <Badge variant="outline">{r.platform_count} platform{r.platform_count !== 1 ? "s" : ""}</Badge>
+                        <Badge variant={r.platform_count > 1 ? "default" : "outline"}>
+                          {r.platform_count} platform{r.platform_count !== 1 ? "s" : ""}
+                        </Badge>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        {r.total_findings > 0 && (
+                          <span className="flex items-center gap-1">
+                            <Bug className="h-3 w-3" />
+                            {r.total_findings.toLocaleString()} findings
+                          </span>
+                        )}
+                        {r.top_score != null && r.top_score > 0 && (
+                          <span className="flex items-center gap-1">
+                            <Trophy className="h-3 w-3" />
+                            Top: {formatScore(r.top_score)}
+                          </span>
+                        )}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1">
                         {[...new Map(r.profiles.map((p) => [p.platform, p])).values()].map((p) => (
@@ -170,7 +183,10 @@ export default function ResearchersPage() {
             </p>
           )}
 
-          {researchersQuery.data && researchersQuery.data.count >= limit && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              Showing {page * limit + 1}-{Math.min((page + 1) * limit, total)} of {total}
+            </p>
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
@@ -184,13 +200,13 @@ export default function ResearchersPage() {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={researchersQuery.data.count < limit}
+                disabled={(page + 1) * limit >= total}
                 onClick={() => setPage((p) => p + 1)}
               >
                 Next
               </Button>
             </div>
-          )}
+          </div>
         </>
       )}
     </div>

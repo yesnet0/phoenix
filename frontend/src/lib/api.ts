@@ -26,7 +26,7 @@ export const getHealth = () => fetchJSON<HealthStatus>("/health");
 
 // Researchers
 export const getResearchers = (skip = 0, limit = 50, sort = "score") =>
-  fetchJSON<{ researchers: ResearcherSummary[]; count: number }>(
+  fetchJSON<{ researchers: ResearcherSummary[]; total: number; count: number }>(
     `/researchers/?skip=${skip}&limit=${limit}&sort=${sort}`
   );
 
@@ -78,3 +78,14 @@ export const getJobStatus = (jobId: string) =>
 
 export const checkHealth = () =>
   fetchJSON<ScrapeHealth>("/scrape/health", { method: "POST" });
+
+// Enrichment & scoring
+export const triggerEnrich = () =>
+  fetchJSON<{ github_links_added: number; profiles_checked: number }>("/scrape/enrich", {
+    method: "POST",
+  });
+
+export const recomputeScores = () =>
+  fetchJSON<{ updated: number }>("/analytics/recompute-scores", {
+    method: "POST",
+  });

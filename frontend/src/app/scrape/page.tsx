@@ -7,6 +7,8 @@ import {
   checkHealth,
   triggerScrape,
   getJobStatus,
+  triggerEnrich,
+  recomputeScores,
 } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Loader2, Play, Activity, RefreshCw } from "lucide-react";
+import { Loader2, Play, Activity, RefreshCw, Sparkles, Calculator } from "lucide-react";
 import type { ScrapeHealth, JobStatus } from "@/types/phoenix";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -112,6 +114,28 @@ export default function ScrapePage() {
     onError: () => toast.error("Failed to trigger scrape"),
   });
 
+  const enrichMutation = useMutation({
+    mutationFn: triggerEnrich,
+    onSuccess: (data) => {
+      toast.success(
+        `Enrichment complete: ${data.github_links_added} GitHub links added, ${data.profiles_checked} profiles checked`
+      );
+      queryClient.invalidateQueries({ queryKey: ["researchers"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
+    },
+    onError: () => toast.error("Enrichment failed"),
+  });
+
+  const scoreMutation = useMutation({
+    mutationFn: recomputeScores,
+    onSuccess: (data) => {
+      toast.success(`Scores recomputed for ${data.updated} researchers`);
+      queryClient.invalidateQueries({ queryKey: ["researchers"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
+    },
+    onError: () => toast.error("Score recomputation failed"),
+  });
+
   const handleScrapeAll = useCallback(() => {
     if (!platformsData) return;
     for (const platform of platformsData.platforms) {
@@ -137,6 +161,30 @@ export default function ScrapePage() {
               <Activity className="mr-2 h-4 w-4" />
             )}
             Check Health
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => enrichMutation.mutate()}
+            disabled={enrichMutation.isPending}
+          >
+            {enrichMutation.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="mr-2 h-4 w-4" />
+            )}
+            Enrich
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => scoreMutation.mutate()}
+            disabled={scoreMutation.isPending}
+          >
+            {scoreMutation.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Calculator className="mr-2 h-4 w-4" />
+            )}
+            Recompute Scores
           </Button>
           <Button onClick={handleScrapeAll} disabled={!platforms.length}>
             <RefreshCw className="mr-2 h-4 w-4" />
