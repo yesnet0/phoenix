@@ -1,13 +1,22 @@
 import type {
   Analytics,
+  FindingVelocity,
   GraphData,
+  HeatmapEntry,
   HealthStatus,
   JobStatus,
+  PlatformAffinity,
+  PlatformComparison,
+  PlatformOverlap,
   ProfileListItem,
   ResearcherDetail,
   ResearcherSummary,
+  RisingStar,
   ScrapeHealth,
   SearchResult,
+  SimilarResearcher,
+  SkillDistribution,
+  SkillResearcher,
   TriggerResponse,
 } from "@/types/phoenix";
 
@@ -89,3 +98,34 @@ export const recomputeScores = () =>
   fetchJSON<{ updated: number }>("/analytics/recompute-scores", {
     method: "POST",
   });
+
+// M4 Insights
+export const getSkillDistribution = () =>
+  fetchJSON<{ distribution: SkillDistribution[] }>("/analytics/skills");
+
+export const getResearchersBySkill = (skill: string, skip = 0, limit = 50) =>
+  fetchJSON<{ skill: string; researchers: SkillResearcher[]; count: number }>(
+    `/analytics/skills?skill=${encodeURIComponent(skill)}&skip=${skip}&limit=${limit}`
+  );
+
+export const getRisingStars = (limit = 10) =>
+  fetchJSON<{ rising_stars: RisingStar[] }>(`/analytics/rising-stars?limit=${limit}`);
+
+export const getHeatmap = () =>
+  fetchJSON<{ heatmap: HeatmapEntry[] }>("/analytics/heatmap");
+
+export const getFindingVelocity = (limit = 10) =>
+  fetchJSON<{ velocity: FindingVelocity[] }>(`/analytics/finding-velocity?limit=${limit}`);
+
+export const getPlatformComparison = () =>
+  fetchJSON<{ platforms: PlatformComparison[] }>("/analytics/platform-comparison");
+
+export const getCrossPlatform = () =>
+  fetchJSON<{ overlap: PlatformOverlap[]; affinity: PlatformAffinity[] }>(
+    "/analytics/cross-platform"
+  );
+
+export const getSimilarResearchers = (id: string, limit = 5) =>
+  fetchJSON<{ similar: SimilarResearcher[]; count: number }>(
+    `/researchers/${id}/similar?limit=${limit}`
+  );

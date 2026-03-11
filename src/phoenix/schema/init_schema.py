@@ -62,8 +62,35 @@ async def seed_platforms(session: AsyncSession) -> None:
     await log.ainfo("platforms_seeded", count=len(PLATFORMS))
 
 
+SKILL_CATEGORIES = [
+    "Web Application Security",
+    "Mobile Security",
+    "API Security",
+    "Network/Infrastructure",
+    "Cloud Security",
+    "Smart Contract/Blockchain",
+    "IoT/Hardware",
+    "Cryptography",
+    "Source Code Review",
+]
+
+
+async def seed_skills(session: AsyncSession) -> None:
+    """Seed the 9 canonical skill taxonomy categories."""
+    for name in SKILL_CATEGORIES:
+        await session.run(
+            """
+            MERGE (s:Skill {name: $name})
+            SET s.id = $name
+            """,
+            name=name,
+        )
+    await log.ainfo("skills_seeded", count=len(SKILL_CATEGORIES))
+
+
 async def init_schema(session: AsyncSession) -> None:
     """Run full schema initialization."""
     await init_constraints(session)
     await init_indexes(session)
     await seed_platforms(session)
+    await seed_skills(session)

@@ -569,6 +569,197 @@ async def get_available_platforms(session: AsyncSession) -> list[str]:
     return [record["platform"] async for record in result]
 
 
+async def get_skill_distribution(session: AsyncSession) -> list[dict]:
+    """Count researchers per skill category."""
+    result = await session.run(
+        """
+        MATCH (s:Skill)
+        OPTIONAL MATCH (p:PlatformProfile)-[:HAS_SKILL]->(s)
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(r:Researcher)
+        RETURN s.name AS skill,
+               count(DISTINCT p) AS profile_count,
+               count(DISTINCT r) AS researcher_count
+        ORDER BY researcher_count DESC
+        """
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_researchers_by_skill(
+    session: AsyncSession,
+    skill_name: str,
+    skip: int = 0,
+    limit: int = 50,
+) -> list[dict]:
+    """Get researchers who have a given skill."""
+    result = await session.run(
+        """
+        MATCH (p:PlatformProfile)-[hs:HAS_SKILL]->(s:Skill {name: $skill_name})
+        MATCH (p)-[:BELONGS_TO]->(r:Researcher)
+        WITH r, collect(DISTINCT {platform: p.platform_name, username: p.username, source: hs.source}) AS profiles
+        RETURN r.id AS id, r.canonical_name AS canonical_name,
+               r.composite_score AS composite_score,
+               profiles, size(profiles) AS profile_count
+        ORDER BY r.composite_score DESC
+        SKIP $skip LIMIT $limit
+        """,
+        skill_name=skill_name,
+        skip=skip,
+        limit=limit,
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_rising_stars(session: AsyncSession, limit: int = 10) -> list[dict]:
+    """Researchers with highest score delta between first and latest snapshot."""
+    result = await session.run(
+        """
+        MATCH (r:Researcher)<-[:BELONGS_TO]-(p:PlatformProfile)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
+        WITH r, p, s ORDER BY s.captured_at ASC
+        WITH r, p, collect(s) AS snaps
+        WHERE size(snaps) >= 2
+        WITH r, p, head(snaps) AS first_snap, last(snaps) AS latest_snap
+        WITH r,
+             sum(COALESCE(latest_snap.overall_score, latest_snap.finding_count * 10.0, 0)) AS latest_total,
+             sum(COALESCE(first_snap.overall_score, first_snap.finding_count * 10.0, 0)) AS first_total,
+             sum(COALESCE(latest_snap.finding_count, 0) - COALESCE(first_snap.finding_count, 0)) AS finding_delta
+        WHERE latest_total > first_total
+        RETURN r.id AS id, r.canonical_name AS name,
+               r.composite_score AS composite_score,
+               round(latest_total - first_total, 2) AS score_delta,
+               finding_delta
+        ORDER BY score_delta DESC
+        LIMIT $limit
+        """,
+        limit=limit,
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_activity_heatmap(session: AsyncSession) -> list[dict]:
+    """Profiles grouped by join_date month."""
+    result = await session.run(
+        """
+        MATCH (p:PlatformProfile)
+        WHERE p.join_date IS NOT NULL
+        WITH p, substring(p.join_date, 0, 7) AS month
+        RETURN month, count(p) AS profile_count
+        ORDER BY month
+        """
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_finding_velocity(session: AsyncSession, limit: int = 10) -> list[dict]:
+    """Finding count delta / time between snapshots."""
+    result = await session.run(
+        """
+        MATCH (r:Researcher)<-[:BELONGS_TO]-(p:PlatformProfile)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
+        WITH r, p, s ORDER BY s.captured_at ASC
+        WITH r, p, collect(s) AS snaps
+        WHERE size(snaps) >= 2
+        WITH r, p, head(snaps) AS first_snap, last(snaps) AS latest_snap
+        WITH r, p,
+             COALESCE(latest_snap.finding_count, 0) - COALESCE(first_snap.finding_count, 0) AS finding_delta,
+             duration.between(date(substring(first_snap.captured_at, 0, 10)), date(substring(latest_snap.captured_at, 0, 10))).days AS days_between
+        WHERE days_between > 0 AND finding_delta > 0
+        WITH r,
+             sum(finding_delta) AS total_finding_delta,
+             max(days_between) AS max_days
+        RETURN r.id AS id, r.canonical_name AS name,
+               total_finding_delta,
+               max_days AS days_tracked,
+               round(toFloat(total_finding_delta) / max_days * 30, 2) AS findings_per_month
+        ORDER BY findings_per_month DESC
+        LIMIT $limit
+        """,
+        limit=limit,
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_platform_comparison(session: AsyncSession) -> list[dict]:
+    """Average score, findings, earnings per platform."""
+    result = await session.run(
+        """
+        MATCH (p:PlatformProfile)-[:HAS_SNAPSHOT]->(s:ProfileSnapshot)
+        WITH p, s ORDER BY s.captured_at DESC
+        WITH p, head(collect(s)) AS latest
+        RETURN p.platform_name AS platform,
+               count(p) AS profile_count,
+               round(avg(COALESCE(latest.overall_score, 0)), 2) AS avg_score,
+               round(avg(COALESCE(latest.finding_count, 0)), 1) AS avg_findings,
+               round(avg(COALESCE(latest.total_earnings, 0)), 0) AS avg_earnings
+        ORDER BY profile_count DESC
+        """
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_cross_platform_overlap(session: AsyncSession) -> list[dict]:
+    """For each pair of platforms, count shared researchers."""
+    result = await session.run(
+        """
+        MATCH (p1:PlatformProfile)-[:BELONGS_TO]->(r:Researcher)<-[:BELONGS_TO]-(p2:PlatformProfile)
+        WHERE p1.platform_name < p2.platform_name
+        RETURN p1.platform_name AS platform_a,
+               p2.platform_name AS platform_b,
+               count(DISTINCT r) AS shared_researchers
+        ORDER BY shared_researchers DESC
+        """
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_platform_affinity(session: AsyncSession) -> list[dict]:
+    """Normalized overlap: shared / min(platform_a_count, platform_b_count)."""
+    result = await session.run(
+        """
+        MATCH (p1:PlatformProfile)-[:BELONGS_TO]->(r:Researcher)<-[:BELONGS_TO]-(p2:PlatformProfile)
+        WHERE p1.platform_name < p2.platform_name
+        WITH p1.platform_name AS platform_a, p2.platform_name AS platform_b,
+             count(DISTINCT r) AS shared
+        MATCH (pa:PlatformProfile {platform_name: platform_a})
+        WITH platform_a, platform_b, shared, count(DISTINCT pa) AS count_a
+        MATCH (pb:PlatformProfile {platform_name: platform_b})
+        WITH platform_a, platform_b, shared, count_a, count(DISTINCT pb) AS count_b
+        WITH platform_a, platform_b, shared, count_a, count_b,
+             CASE WHEN count_a < count_b THEN count_a ELSE count_b END AS min_count
+        WHERE min_count > 0
+        RETURN platform_a, platform_b, shared,
+               round(toFloat(shared) / min_count, 4) AS affinity_score
+        ORDER BY affinity_score DESC
+        """
+    )
+    return [dict(record) async for record in result]
+
+
+async def get_similar_researchers(
+    session: AsyncSession, researcher_id: str, limit: int = 5
+) -> list[dict]:
+    """Researchers who share the most skills with a given researcher."""
+    result = await session.run(
+        """
+        MATCH (r1:Researcher {id: $researcher_id})<-[:BELONGS_TO]-(p1:PlatformProfile)-[:HAS_SKILL]->(s:Skill)
+        WITH r1, collect(DISTINCT s) AS r1_skills
+        MATCH (p2:PlatformProfile)-[:HAS_SKILL]->(s2:Skill)
+        WHERE s2 IN r1_skills
+        MATCH (p2)-[:BELONGS_TO]->(r2:Researcher)
+        WHERE r2 <> r1
+        WITH r2, count(DISTINCT s2) AS shared_skills, size(r1_skills) AS total_skills
+        RETURN r2.id AS id, r2.canonical_name AS name,
+               r2.composite_score AS composite_score,
+               shared_skills,
+               round(toFloat(shared_skills) / total_skills, 2) AS similarity
+        ORDER BY shared_skills DESC, r2.composite_score DESC
+        LIMIT $limit
+        """,
+        researcher_id=researcher_id,
+        limit=limit,
+    )
+    return [dict(record) async for record in result]
+
+
 async def list_researchers_enriched(
     session: AsyncSession,
     skip: int = 0,

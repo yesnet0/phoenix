@@ -2,7 +2,7 @@
 
 import { use, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getResearcher } from "@/lib/api";
+import { getResearcher, getSimilarResearchers } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +28,7 @@ import {
   TrendingUp,
   Bug,
   Trophy,
+  Users,
 } from "lucide-react";
 import Link from "next/link";
 import type { ProfileDetail, IdentityLinkDetail } from "@/types/phoenix";
@@ -361,6 +362,12 @@ export default function ResearcherDetailPage({
     queryFn: () => getResearcher(id),
   });
 
+  const { data: similarData } = useQuery({
+    queryKey: ["similar-researchers", id],
+    queryFn: () => getSimilarResearchers(id, 5),
+    enabled: !!data,
+  });
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -419,6 +426,20 @@ export default function ResearcherDetailPage({
         </div>
       </div>
 
+      {/* Inferred Skills */}
+      {(() => {
+        const allSkills = [...new Set(data.profiles.flatMap(p => p.skill_tags || []))];
+        return allSkills.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {allSkills.map((skill) => (
+              <Badge key={skill} className="bg-primary/10 text-primary text-xs">
+                <Tag className="mr-1 h-3 w-3" /> {skill}
+              </Badge>
+            ))}
+          </div>
+        ) : null;
+      })()}
+
       <Separator />
 
       {/* Identity resolution chain */}
@@ -435,6 +456,42 @@ export default function ResearcherDetailPage({
       </div>
 
       <SnapshotChart profiles={data.profiles} />
+
+      {/* Similar Researchers */}
+      {similarData && similarData.similar.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Users className="h-4 w-4" /> Similar Researchers
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {similarData.similar.map((sr) => (
+                <div
+                  key={sr.id}
+                  className="flex items-center justify-between rounded-md border p-3"
+                >
+                  <div className="flex items-center gap-3">
+                    <Link
+                      href={`/researchers/${sr.id}`}
+                      className="font-medium hover:underline"
+                    >
+                      {sr.name}
+                    </Link>
+                    <Badge variant="secondary" className="text-xs">
+                      {sr.shared_skills} shared skill{sr.shared_skills !== 1 ? "s" : ""}
+                    </Badge>
+                  </div>
+                  <span className="text-sm font-mono text-muted-foreground">
+                    {(sr.similarity * 100).toFixed(0)}% match
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

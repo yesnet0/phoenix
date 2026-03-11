@@ -7,7 +7,7 @@ from phoenix.schema.queries import get_graph_data
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def graph():
     """Return nodes and edges for the full researcher graph."""
     async with get_session() as session:

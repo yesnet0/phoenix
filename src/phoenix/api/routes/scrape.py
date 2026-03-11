@@ -4,10 +4,12 @@ import asyncio
 import time
 from datetime import datetime, UTC
 
+import httpx
 from celery import shared_task
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from phoenix.config import settings
 from phoenix.core.database import get_session
 from phoenix.core.logging import get_logger
 from phoenix.core.tasks import app as celery_app
@@ -187,4 +189,25 @@ async def _run_scrape_async(job_id: str, platform_name: str, max_profiles: int) 
         duration_seconds=round(time.time() - start, 2),
         errors=errors,
     )
+    await _notify_completion(result, platform_name)
     return result.model_dump()
+
+
+async def _notify_completion(result: ScrapeResult, platform_name: str):
+    """Send voice notification on scrape completion."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            if result.profiles_failed == 0 and not result.errors:
+                msg = (f"Phoenix scrape complete. {result.profiles_scraped} profiles "
+                       f"from {platform_name} in {result.duration_seconds:.0f} seconds. "
+                       f"{result.identities_resolved} identities resolved.")
+            else:
+                msg = (f"Phoenix scrape finished with issues. {platform_name}: "
+                       f"{result.profiles_scraped} scraped, {result.profiles_failed} failed. "
+                       f"{len(result.errors)} errors.")
+            await client.post(
+                settings.notification_url,
+                json={"message": msg},
+            )
+    except Exception:
+        pass  # Don't let notification failure break scrapes

@@ -11,6 +11,7 @@ import {
   Zap,
   Activity,
   Menu,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getHealth } from "@/lib/api";
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: BarChart3 },
   { href: "/graph", label: "Graph", icon: GitGraph },
   { href: "/researchers", label: "Researchers", icon: Search },
+  { href: "/skills", label: "Skills", icon: Tag },
   { href: "/profiles", label: "Profiles", icon: Users },
   { href: "/scrape", label: "Scrape", icon: Zap },
 ];

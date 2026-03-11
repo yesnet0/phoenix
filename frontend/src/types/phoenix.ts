@@ -201,3 +201,69 @@ export interface HealthStatus {
   status: string;
   neo4j: string;
 }
+
+// M4 Insights types
+
+export interface SkillDistribution {
+  skill: string;
+  profile_count: number;
+  researcher_count: number;
+}
+
+export interface SkillResearcher {
+  id: string;
+  canonical_name: string;
+  composite_score: number;
+  profiles: { platform: string; username: string; source: string }[];
+  profile_count: number;
+}
+
+export interface RisingStar {
+  id: string;
+  name: string;
+  composite_score: number;
+  score_delta: number;
+  finding_delta: number;
+}
+
+export interface HeatmapEntry {
+  month: string;
+  profile_count: number;
+}
+
+export interface FindingVelocity {
+  id: string;
+  name: string;
+  total_finding_delta: number;
+  days_tracked: number;
+  findings_per_month: number;
+}
+
+export interface PlatformComparison {
+  platform: string;
+  profile_count: number;
+  avg_score: number;
+  avg_findings: number;
+  avg_earnings: number;
+}
+
+export interface PlatformOverlap {
+  platform_a: string;
+  platform_b: string;
+  shared_researchers: number;
+}
+
+export interface PlatformAffinity {
+  platform_a: string;
+  platform_b: string;
+  shared: number;
+  affinity_score: number;
+}
+
+export interface SimilarResearcher {
+  id: string;
+  name: string;
+  composite_score: number;
+  shared_skills: number;
+  similarity: number;
+}

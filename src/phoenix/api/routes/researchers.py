@@ -7,6 +7,7 @@ from phoenix.schema.queries import (
     get_identity_links,
     get_researcher_count,
     get_researcher_detail,
+    get_similar_researchers,
     list_profiles,
     list_researchers,
     list_researchers_enriched,
@@ -17,7 +18,7 @@ from phoenix.schema.queries import (
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def list_all(skip: int = 0, limit: int = 50, sort: str = "score"):
     async with get_session() as session:
         researchers = await list_researchers_enriched(session, skip=skip, limit=limit, sort_by=sort)
@@ -47,5 +48,14 @@ async def detail(researcher_id: str):
         if not researcher:
             raise HTTPException(status_code=404, detail="Researcher not found")
         links = await get_identity_links(session, researcher_id)
+        similar = await get_similar_researchers(session, researcher_id)
     researcher["identity_links"] = links
+    researcher["similar_researchers"] = similar
     return researcher
+
+
+@router.get("/{researcher_id}/similar")
+async def similar(researcher_id: str, limit: int = 5):
+    async with get_session() as session:
+        data = await get_similar_researchers(session, researcher_id, limit=limit)
+    return {"similar": data, "count": len(data)}

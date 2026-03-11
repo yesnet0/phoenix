@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { getAnalytics } from "@/lib/api";
+import { getAnalytics, getRisingStars, getPlatformComparison, getHeatmap, getCrossPlatform } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -249,6 +249,195 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <M4InsightsSection />
+    </div>
+  );
+}
+
+function M4InsightsSection() {
+  const { data: risingData, isLoading: risingLoading } = useQuery({
+    queryKey: ["risingStars"],
+    queryFn: () => getRisingStars(5),
+  });
+
+  const { data: platformData, isLoading: platformLoading } = useQuery({
+    queryKey: ["platformComparison"],
+    queryFn: getPlatformComparison,
+  });
+
+  const { data: heatmapData, isLoading: heatmapLoading } = useQuery({
+    queryKey: ["heatmap"],
+    queryFn: getHeatmap,
+  });
+
+  const { data: crossData, isLoading: crossLoading } = useQuery({
+    queryKey: ["crossPlatform"],
+    queryFn: getCrossPlatform,
+  });
+
+  const filteredHeatmap = heatmapData?.heatmap
+    .filter((e) => e.month !== "1970-01")
+    .sort((a, b) => a.month.localeCompare(b.month));
+
+  const topAffinity = crossData?.affinity
+    .sort((a, b) => b.affinity_score - a.affinity_score)
+    .slice(0, 10);
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      {/* Rising Stars */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Rising Stars</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {risingLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </div>
+          ) : risingData?.rising_stars.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead className="text-right">Score Delta</TableHead>
+                  <TableHead className="text-right">Finding Delta</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {risingData.rising_stars.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <Link
+                        href={`/researchers/${r.id}`}
+                        className="text-primary hover:underline font-medium"
+                      >
+                        {r.name}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      +{formatScore(r.score_delta)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      +{r.finding_delta}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <p className="text-sm text-muted-foreground">No rising star data yet</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Platform Comparison */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Platform Comparison</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {platformLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </div>
+          ) : platformData?.platforms.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Platform</TableHead>
+                  <TableHead className="text-right">Profiles</TableHead>
+                  <TableHead className="text-right">Avg Score</TableHead>
+                  <TableHead className="text-right">Avg Findings</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {platformData.platforms.map((p) => (
+                  <TableRow key={p.platform}>
+                    <TableCell className="font-medium">{p.platform}</TableCell>
+                    <TableCell className="text-right">{p.profile_count.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono">{formatScore(p.avg_score)}</TableCell>
+                    <TableCell className="text-right font-mono">{p.avg_findings.toFixed(1)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <p className="text-sm text-muted-foreground">No platform data yet</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Activity Heatmap */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Activity Heatmap</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {heatmapLoading ? (
+            <Skeleton className="h-64 w-full" />
+          ) : filteredHeatmap?.length ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={filteredHeatmap}>
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} angle={-45} textAnchor="end" height={60} />
+                <YAxis label={{ value: "Profiles", angle: -90, position: "insideLeft" }} />
+                <Tooltip />
+                <Bar
+                  dataKey="profile_count"
+                  fill="hsl(var(--chart-3))"
+                  radius={[4, 4, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-sm text-muted-foreground">No heatmap data yet</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Platform Affinity */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Platform Affinity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {crossLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </div>
+          ) : topAffinity?.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Platform A</TableHead>
+                  <TableHead>Platform B</TableHead>
+                  <TableHead className="text-right">Shared</TableHead>
+                  <TableHead className="text-right">Affinity Score</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {topAffinity.map((a, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-medium">{a.platform_a}</TableCell>
+                    <TableCell className="font-medium">{a.platform_b}</TableCell>
+                    <TableCell className="text-right">{a.shared}</TableCell>
+                    <TableCell className="text-right font-mono">{a.affinity_score.toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <p className="text-sm text-muted-foreground">No cross-platform data yet</p>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
