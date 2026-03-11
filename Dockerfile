@@ -14,4 +14,4 @@ COPY src/ src/
 
 RUN poetry install --no-interaction --no-ansi
 
-CMD ["celery", "-A", "phoenix.core.tasks", "worker", "--loglevel=info", "--concurrency=2"]
+CMD ["uvicorn", "phoenix.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

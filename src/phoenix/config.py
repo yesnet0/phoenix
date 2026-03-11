@@ -1,5 +1,6 @@
 """Application configuration via Pydantic Settings."""
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -23,10 +24,21 @@ class Settings(BaseSettings):
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
 
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"
+
+    # Notifications
+    notification_url: str = "http://localhost:8888/notify"
 
 
 settings = Settings()

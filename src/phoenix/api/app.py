@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from phoenix.config import settings
 from phoenix.core.database import close_driver
 from phoenix.core.logging import setup_logging
 from phoenix.scrapers.registry import discover_scrapers
@@ -30,7 +31,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://localhost:3001"],
+        allow_origins=settings.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
