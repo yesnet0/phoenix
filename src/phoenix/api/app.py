@@ -27,6 +27,7 @@ def create_app() -> FastAPI:
         description="Bug bounty researcher skills graph API",
         version="0.2.0",
         lifespan=lifespan,
+        redirect_slashes=False,
     )
 
     app.add_middleware(
